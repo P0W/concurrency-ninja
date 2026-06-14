@@ -1,0 +1,52 @@
+/* ------------------------------------------------------------------------
+ * Concurrency Ninja — custom mdBook stylesheet
+ *
+ * Responsive code blocks: wrap long C++ lines on narrow viewports so phones
+ * and small monitors don't need horizontal scroll, while desktop keeps the
+ * normal monospace layout.
+ * ------------------------------------------------------------------------ */
+
+/* ---------- Phones + small monitors (<= 900px wide) ---------- */
+@media (max-width: 900px) {
+  pre code,
+  pre.hljs {
+    white-space: pre-wrap;          /* preserve indentation, allow wrap   */
+    word-break: break-word;         /* break long identifiers if needed   */
+    overflow-wrap: anywhere;        /* prevent overflow on huge tokens    */
+    tab-size: 2;
+  }
+
+  /* Inline code: never break across line, but allow wrap if absurd       */
+  code {
+    overflow-wrap: anywhere;
+  }
+}
+
+/* ---------- Desktop (>= 901px): keep code intact, show scrollbar ------- */
+@media (min-width: 901px) {
+  pre {
+    scrollbar-width: thin;                          /* Firefox             */
+    scrollbar-color: rgba(127, 127, 127, 0.5) transparent;
+  }
+  pre::-webkit-scrollbar { height: 8px; }
+  pre::-webkit-scrollbar-track { background: transparent; }
+  pre::-webkit-scrollbar-thumb {
+    background: rgba(127, 127, 127, 0.45);
+    border-radius: 4px;
+  }
+  pre::-webkit-scrollbar-thumb:hover { background: rgba(127, 127, 127, 0.7); }
+}
+
+/* ---------- Compact code: slightly smaller font fits more per line ----- */
+pre code,
+pre.hljs {
+  font-size: 0.88em;
+  line-height: 1.45;
+}
+
+/* ---------- Tables: never overflow horizontally either ----------------- */
+table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
