@@ -1,0 +1,41 @@
+[book]
+title = "Concurrency Ninja"
+authors = ["P0W"]
+description = "A pragmatic field manual for Modern C++ concurrency (C++17 / C++20). Original, code-first, no hand-waving."
+language = "en"
+multilingual = false
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/P0W/concurrency-ninja"
+edit-url-template = "https://github.com/P0W/concurrency-ninja/edit/main/{path}"
+site-url = "/concurrency-ninja/"
+no-section-label = false
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 2
+boost-paragraph = 1
+expand = true
+heading-split-level = 3
+
+[output.html.playground]
+editable = false
+copy-js = true
+line-numbers = true
+
+[output.html.print]
+enable = true
