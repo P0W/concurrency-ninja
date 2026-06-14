@@ -2,8 +2,8 @@
 <!--
   Concurrency Ninja — cover v4 (Mascot edition).
   Fully original mascot: "Cody the Concurrency Turtle".
-  Cute chunky cartoon turtle, mid-spin, twin nunchucks blurring into motion arcs.
-  Original geometric design — no franchise likeness.
+  Cute chunky cartoon turtle, mid-spin, batons blurring into motion arcs.
+  Original geometric design.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="2400" viewBox="0 0 1600 2400">
   <defs>
@@ -75,7 +75,7 @@
   <!-- ============================================ -->
   <g transform="translate(800,1430)">
 
-    <!-- Motion arcs for spinning nunchucks (behind mascot) -->
+    <!-- Motion arcs for spinning batons (behind mascot) -->
     <g fill="none" stroke="#ff9a45" stroke-width="3" opacity="0.18" filter="url(#softGlow)">
       <circle cx="-340" cy="-100" r="180"/>
       <circle cx="-340" cy="-100" r="150"/>
@@ -115,52 +115,36 @@
       <line x1="-115" y1="140" x2="115" y2="140"/>
     </g>
 
-    <!-- LEFT arm + nunchuck handle (held) -->
+    <!-- LEFT arm (held baton) -->
     <g transform="translate(-180,30) rotate(-25)">
       <ellipse cx="0" cy="0" rx="55" ry="40" fill="url(#bodyGrad)" stroke="#3a6a18" stroke-width="5"/>
       <!-- Wrist guard -->
       <rect x="-35" y="20" width="70" height="22" rx="6" fill="#d44616" stroke="#7a1f0a" stroke-width="3"/>
       <!-- Hand (fist) -->
       <circle cx="0" cy="60" r="32" fill="url(#bodyGrad)" stroke="#3a6a18" stroke-width="4"/>
-      <!-- Held nunchuck stick -->
+      <!-- Held baton -->
       <rect x="-12" y="55" width="24" height="80" rx="6" fill="url(#chuckShine)" stroke="#0c0a06" stroke-width="3"/>
-      <!-- Chain -->
-      <g fill="none" stroke="#aaa3a0" stroke-width="3.5" stroke-dasharray="3 5">
-        <line x1="0" y1="130" x2="-90" y2="170"/>
-      </g>
-      <!-- Free nunchuck stick (motion-blurred) -->
-      <g filter="url(#motionBlur)">
-        <rect x="-150" y="155" width="120" height="22" rx="6" transform="rotate(35 -90 170)" fill="url(#chuckShine)" stroke="#0c0a06" stroke-width="3"/>
-      </g>
     </g>
 
-    <!-- RIGHT arm + nunchuck handle (held) -->
+    <!-- RIGHT arm (held baton) -->
     <g transform="translate(180,30) rotate(25)">
       <ellipse cx="0" cy="0" rx="55" ry="40" fill="url(#bodyGrad)" stroke="#3a6a18" stroke-width="5"/>
       <rect x="-35" y="20" width="70" height="22" rx="6" fill="#d44616" stroke="#7a1f0a" stroke-width="3"/>
       <circle cx="0" cy="60" r="32" fill="url(#bodyGrad)" stroke="#3a6a18" stroke-width="4"/>
+      <!-- Held baton -->
       <rect x="-12" y="55" width="24" height="80" rx="6" fill="url(#chuckShine)" stroke="#0c0a06" stroke-width="3"/>
-      <g fill="none" stroke="#aaa3a0" stroke-width="3.5" stroke-dasharray="3 5">
-        <line x1="0" y1="130" x2="90" y2="170"/>
-      </g>
-      <g filter="url(#motionBlur)">
-        <rect x="30" y="155" width="120" height="22" rx="6" transform="rotate(-35 90 170)" fill="url(#chuckShine)" stroke="#0c0a06" stroke-width="3"/>
-      </g>
     </g>
 
     <!-- Head (sits on body, slightly forward) -->
     <g transform="translate(0,-160)">
       <ellipse cx="0" cy="0" rx="140" ry="125" fill="url(#bodyGrad)" stroke="#3a6a18" stroke-width="5"/>
 
-      <!-- Bandana - tied around forehead, ends streaming -->
-      <rect x="-145" y="-55" width="290" height="40" fill="url(#bandana)" stroke="#7a1f0a" stroke-width="3"/>
-      <!-- Bandana eye-holes -->
-      <ellipse cx="-55" cy="-35" rx="40" ry="22" fill="#0a0e1f"/>
-      <ellipse cx="55"  cy="-35" rx="40" ry="22" fill="#0a0e1f"/>
-      <!-- Bandana tails (streaming behind from rotation) -->
+      <!-- Headband (across forehead, above eyes) -->
+      <rect x="-130" y="-100" width="260" height="33" fill="url(#bandana)" stroke="#7a1f0a" stroke-width="3"/>
+      <!-- Headband tails streaming behind from rotation -->
       <g fill="url(#bandana)" stroke="#7a1f0a" stroke-width="3">
-        <polygon points="-145,-50 -255,-90 -270,-30 -150,-15"/>
-        <polygon points="-255,-90 -340,-105 -350,-65 -270,-30"/>
+        <polygon points="-130,-100 -240,-125 -258,-94 -132,-68"/>
+        <polygon points="-240,-125 -322,-137 -332,-108 -258,-94"/>
       </g>
 
       <!-- Eyes (looking forward, determined) -->

@@ -303,7 +303,7 @@ Action A happens-before B if:
 2. A **synchronizes-with** B (release/acquire pair, mutex unlock/lock, etc.), **or**
 3. A happens-before C and C happens-before B (transitivity).
 
-*Synchronizes-with* is the cross-thread building block; combined with sequenced-before within each thread it forms *happens-before*. Consume ordering and dependency-ordered-before are weaker cousins covered in Chapter 5.
+*Synchronizes-with* is the cross-thread building block; combined with sequenced-before within each thread it forms *happens-before*. Consume ordering and dependency-ordered-before are weaker cousins covered in Chapter 6.
 
 If A happens-before B, every write performed by A (and everything sequenced before A) is visible at B.
 
@@ -552,4 +552,4 @@ void handle_request() {
 
 ---
 
-*Next: Chapter 2 — `std::mutex` and the Art of Not Shooting Yourself in Both Feet Simultaneously.*
+*Next: Chapter 2 — `std::thread`, `std::jthread`, and the Art of Not Shooting Yourself in Both Feet Simultaneously.*

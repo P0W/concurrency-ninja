@@ -58,7 +58,7 @@ If `produce()` finishes before `consume()` calls `wait()`, the predicate fires i
 - A flag — it stores no state; missed notifications vanish.
 - A POSIX signal — it only reaches threads already sleeping on the queue.
 - A data queue — it queues *threads*, not values.
-- A semaphore — no counter; `std::counting_semaphore` is in Chapter 7.
+- A semaphore — no counter; `std::counting_semaphore` is in Chapter 8.
 
 **IS:**
 - A wait queue stapled to a mutex.

@@ -117,7 +117,7 @@ public:
 };
 ```
 
-*See Ch. 6.*
+*See Ch. 7.*
 
 ---
 
@@ -142,7 +142,7 @@ int result = inner.get(); // consumed here, when you choose
 
 Flatten the chain, or use coroutines. If you see `future<future<T>>`, redesign.
 
-*See Ch. 6.*
+*See Ch. 7.*
 
 ---
 

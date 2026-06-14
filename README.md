@@ -8,7 +8,7 @@
 [![Made with mdBook](https://img.shields.io/badge/made%20with-mdBook-orange?style=flat-square)](https://rust-lang.github.io/mdBook/)
 
 <p align="center">
-  <img src="assets/cover.png" alt="Concurrency Ninja cover — Cody the Concurrency Turtle spinning twin nunchucks" width="320">
+  <img src="src/assets/cover.png" alt="Concurrency Ninja cover" width="320">
 </p>
 
 ## What this is
@@ -38,23 +38,12 @@ Engineers who can already read C++ but want to stop guessing about threading. No
 
 **[p0w.github.io/concurrency-ninja](https://p0w.github.io/concurrency-ninja/)** — full book, with search, dark mode, deep links, copyable code.
 
-A polished `.docx` is also available in [Releases](https://github.com/P0W/concurrency-ninja/releases) for offline reading.
-
-## Build locally
-
-```bash
-cargo install mdbook
-mdbook serve --open
-```
-
-That's it. No `npm install`, no Docker.
-
 ## Contributing
 
 Errata, clearer analogies, missing edge cases, better pattern variations — all welcome.
 
 1. Open an issue describing what's wrong / what's missing.
-2. PR against `main`. CI builds the book and runs link-check on every PR.
+2. PR against `main`. CI builds and deploys the book on merge to `main`.
 3. By submitting, you agree your contribution is licensed under the same dual license as the rest of the book.
 
 ## License
@@ -62,8 +51,8 @@ Errata, clearer analogies, missing edge cases, better pattern variations — all
 Dual-licensed:
 
 - **Prose** (chapters, intuitions, explanations) — [Creative Commons Attribution 4.0 International (CC BY 4.0)](LICENSE-CC-BY-4.0)
-- **Code samples** (snippets, build scripts) — [MIT](LICENSE-MIT)
-- **Cover art** (Cody the Concurrency Turtle in `assets/`) — CC BY 4.0, same as the prose
+- **Code samples** (snippets) — [MIT](LICENSE-MIT)
+- **Cover art** (`src/assets/cover.svg` and `cover.png`) — CC BY 4.0, same as the prose
 
 Use the code in proprietary projects with attribution. Share/remix the prose with attribution. No restrictions on either beyond that.
 

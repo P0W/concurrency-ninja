@@ -787,4 +787,4 @@ If you do not know why your memory order is correct, it is wrong.
 
 ---
 
-*Chapter 7 — `std::mutex`, `std::condition_variable`, and the Lost Art of Not Spinning*
+*Chapter 7 — Futures: `async`, `future`, `promise`, `packaged_task`*

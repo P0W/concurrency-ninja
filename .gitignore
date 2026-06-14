@@ -1,0 +1,19 @@
+# mdBook build output
+book/
+
+# License audit notes (human-review only; not part of the published repo)
+AUDIT-license.md
+
+# Local setup artifacts
+PUSH-CHECKLIST.txt
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+# Added by cleanup pass
+AUDIT-*.md
+*.tmp
+.vscode/
+.idea/

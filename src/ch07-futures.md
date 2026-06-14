@@ -574,7 +574,7 @@ std::vector<T> when_all(std::vector<std::future<T>>& fv)
 
 Suboptimal only when task latencies are wildly unequal and you care about seeing the fast ones early. Otherwise it's fine.
 
-**Faking `when_any`** requires N watcher threads, each blocking in `get()`. You spawn O(N) threads whose entire job is to wait. This is ugly enough that if you genuinely need `when_any`, reach for Folly's `SemiFuture`, HPX's `future`, or standard coroutines (Chapter 12). The standard's future model is pull-based by design; push-based composition is not in `<future>`.
+**Faking `when_any`** requires N watcher threads, each blocking in `get()`. You spawn O(N) threads whose entire job is to wait. This is ugly enough that if you genuinely need `when_any`, reach for Folly's `SemiFuture`, HPX's `future`, or standard coroutines. The standard's future model is pull-based by design; push-based composition is not in `<future>`.
 
 ---
 
@@ -614,8 +614,8 @@ p.set_value(2);  // throws future_error(promise_already_satisfied)
 
 ## 7.13 When NOT to Use Futures
 
-- **High-frequency producer/consumer** — one heap allocation per shared state; use a condvar queue (Ch. 5) or lock-free ring buffer (Ch. 11).
-- **Continuation chains** (`.then().then()`) — not in standard C++; use coroutines (Ch. 12) or Folly/HPX.
+- **High-frequency producer/consumer** — one heap allocation per shared state; use a condvar queue (Ch. 4) or lock-free ring buffer (Ch. 11).
+- **Continuation chains** (`.then().then()`) — not in standard C++; use coroutines or Folly/HPX.
 - **GPU / heterogeneous compute** — CUDA/SYCL have their own event types; `std::future` does not interop.
 - **Multi-condition waits** — "wake me when A or B or timeout"; `std::condition_variable` with a compound predicate is more expressive.
 - **Fire-and-forget** — the blocking destructor makes true fire-and-forget impossible with `std::async`; use a thread pool with a void queue.

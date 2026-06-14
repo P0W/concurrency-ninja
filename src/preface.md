@@ -1,5 +1,7 @@
 # Preface: Why This Book Exists
 
+![Concurrency Ninja cover](assets/cover.png)
+
 ---
 
 ## The Bug That Started This
@@ -104,18 +106,18 @@ machine with more cores, during a demo.
 
 | # | Chapter | One-liner |
 |---|---------|-----------|
-| 1 | The Memory Model | Why your intuition is a liability and what to replace it with |
-| 2 | `std::thread` and Friends | Launch, join, detach — and why detach will betray you |
-| 3 | Mutexes and Locks | `scoped_lock`, lock ordering, and the deadlock two `lock_guard` calls apart |
-| 4 | Condition Variables | The predicate pattern, spurious wakeups, and the lost-wakeup that tests won't find |
-| 5 | Atomics | Six memory orders, when `seq_cst` is right (usually), when it isn't |
-| 6 | Lock-Free Data Structures | ABA, hazard pointers, and the case for not writing your own queue |
-| 7 | `std::future` and `std::promise` | Task-based parallelism, its costs, and what `launch::async` actually promises |
-| 8 | Thread Pools | Why raw threads don't scale, work stealing, and false sharing in your task queue |
-| 9 | False Sharing | The $64 problem, `hardware_destructive_interference_size`, and lying benchmarks |
-| 10 | Synchronization Patterns | Latches, barriers, semaphores, `call_once`, double-checked locking done right |
-| 11 | Testing and Debugging | TSan, Helgrind, stress tests, and the uncomfortable truth about what tests can't prove |
-| 12 | Pitfalls Catalogue | 40 named, reproducible concurrent bugs. Bookmark this chapter. |
+| 1 | Foundations: The Machine Beneath | Why your intuition is a liability and what to replace it with |
+| 2 | `std::thread` & `std::jthread` | Launch, join, detach — and why detach will betray you |
+| 3 | Mutexes & Locks | `scoped_lock`, lock ordering, and the deadlock two `lock_guard` calls apart |
+| 4 | `std::condition_variable` | The predicate pattern, spurious wakeups, and the lost-wakeup that tests won't find |
+| 5 | `std::call_once` & `once_flag` | Initialization patterns, the Meyers singleton, and DCLP done right |
+| 6 | `std::atomic` & the Memory Model | Every `memory_order`, CAS, atomic-flag, atomic-ref, fences |
+| 7 | Futures: `async` / `future` / `promise` | Task-based parallelism, its costs, and what `launch::async` actually promises |
+| 8 | C++20: `latch`, `barrier`, `semaphore` | The primitives you've been hand-rolling since 2003 |
+| 9 | Cooperative Cancellation: `stop_token` | Clean shutdown without polling, `jthread`, `cv_any` overload |
+| 10 | Thread-Local Storage & False Sharing | `thread_local`, cache-line padding, sharded counters |
+| 11 | Production Patterns | SPSC ring, thread pool, atomic publish, MPMC queue, TTL cache |
+| 12 | The Pitfalls Catalog | Named, reproducible concurrent bugs — bookmark this chapter |
 
 ---
 
@@ -134,8 +136,8 @@ The scope is deliberate. Narrow and deep beats wide and shallow.
 
 ## How to Read It
 
-Chapters build. Chapter 1 (memory model) is the foundation for Chapter 5 (atomics) is the
-foundation for Chapter 6 (lock-free). Don't skip Chapter 1. Everyone who skips Chapter 1
+Chapters build. Chapter 1 (memory model) is the foundation for Chapter 6 (atomics) is the
+foundation for Chapter 11 (production patterns). Don't skip Chapter 1. Everyone who skips Chapter 1
 later wishes they hadn't.
 
 Each chapter stands alone as a reference. Six months from now, debugging a condition variable,
@@ -275,7 +277,7 @@ assert(x.load(std::memory_order_relaxed) == 1);   // Can FAIL.
 ```
 
 `relaxed` operations are atomic — no data race — but provide no ordering guarantees between
-*different* variables. Thread 2 can observe `y == 1` without yet seeing `x == 1`. Chapter 5
+*different* variables. Thread 2 can observe `y == 1` without yet seeing `x == 1`. Chapter 6
 explains exactly why. For now: `relaxed` is only safe for independent counters. Everything
 else needs a real memory order, and Chapter 1 gives you the framework to know which one.
 

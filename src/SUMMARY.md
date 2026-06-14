@@ -1,5 +1,4 @@
-# The summary spine of the book.
-# mdBook reads this to generate the navigation.
+# Summary
 
 [Preface](preface.md)
 
