@@ -36,9 +36,29 @@ table {
   max-width: 100%;
 }
 
+/* ---------- Book cover centering on web -------------------------------- */
+.book-cover,
+p:has(> img[alt="Concurrency Ninja cover"]) {
+  text-align: center;
+  margin: 0.5rem auto 2rem auto;
+}
+
+.book-cover img,
+img[alt="Concurrency Ninja cover"] {
+  display: block;
+  max-width: 420px;
+  width: 100%;
+  height: auto;
+  margin: 0 auto;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
 /* ------------------------------------------------------------------------
  * Professional Technical Book Print Stylesheet (@media print)
  * Produces an O'Reilly / No Starch Press style layout from print.html:
+ * - Dedicated full-page Cover on Page 1 with zero headers/footers
+ * - Overrides browser default timestamp & URL headers/footers with book running headers
  * - Forces clean black-on-white book typography even if Navy theme is active
  * - Uses full printable width (.content main max-width: 100%)
  * - 9.5pt body text, 7.8pt monospace code (fits ~105 chars/line without wrap)
@@ -47,7 +67,52 @@ table {
 @media print {
   @page {
     size: A4;
-    margin: 14mm 14mm 16mm 14mm;
+    margin: 16mm 14mm 16mm 14mm;
+    @top-left {
+      content: "CONCURRENCY NINJA";
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 7.5pt;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      color: #64748b;
+    }
+    @top-center {
+      content: "";
+    }
+    @top-right {
+      content: "MODERN C++ FIELD MANUAL";
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 7.5pt;
+      font-style: italic;
+      color: #64748b;
+    }
+    @bottom-left {
+      content: "";
+    }
+    @bottom-center {
+      content: "—  " counter(page) "  —";
+      font-family: Georgia, "Charter", "Cambria", "Times New Roman", serif;
+      font-size: 8.5pt;
+      color: #334155;
+    }
+    @bottom-right {
+      content: "";
+    }
+  }
+
+  /* Cover page (Page 1): clean full-page cover with NO headers, timestamps, URLs, or page numbers */
+  @page :first {
+    @top-left { content: ""; }
+    @top-center { content: ""; }
+    @top-right { content: ""; }
+    @bottom-left { content: ""; }
+    @bottom-center { content: ""; }
+    @bottom-right { content: ""; }
+  }
+
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 
   :root,
@@ -80,6 +145,16 @@ table {
     background: #ffffff !important;
   }
 
+  #sidebar,
+  #menu-bar,
+  #menu-bar-hover-placeholder,
+  #search-wrapper,
+  .nav-chapters,
+  .mobile-nav-chapters {
+    display: none !important;
+  }
+
+  #body-container,
   .page,
   .page-wrapper,
   #page-wrapper,
@@ -91,6 +166,7 @@ table {
     margin: 0 !important;
     padding: 0 !important;
     background: #ffffff !important;
+    overflow: visible !important;
   }
 
   /* Clean, proportional book headings */
@@ -274,8 +350,33 @@ table {
     color: #0f172a !important;
   }
 
-  /* Image sizing (e.g. cover image on README) */
-  img {
+  /* Dedicated full-page Cover on Page 1 */
+  .book-cover,
+  p:has(> img[alt="Concurrency Ninja cover"]) {
+    display: block !important;
+    text-align: center !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    page-break-after: always !important;
+    break-after: page !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  .book-cover img,
+  img[alt="Concurrency Ninja cover"] {
+    max-height: 256mm !important;
+    max-width: 100% !important;
+    width: auto !important;
+    height: auto !important;
+    display: block !important;
+    margin: 0 auto !important;
+    border-radius: 4pt !important;
+    box-shadow: none !important;
+  }
+
+  /* Other images in the book */
+  img:not([alt="Concurrency Ninja cover"]) {
     max-height: 110mm !important;
     width: auto !important;
   }

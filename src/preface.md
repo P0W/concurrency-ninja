@@ -1,8 +1,10 @@
-# Preface: Why This Book Exists
+<div class="book-cover">
 
 ![Concurrency Ninja cover](assets/cover.png)
 
----
+</div>
+
+# Preface: Why This Book Exists
 
 ## The Bug That Started This
 
