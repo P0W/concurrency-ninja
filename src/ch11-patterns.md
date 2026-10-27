@@ -22,7 +22,7 @@ Every snippet needs this. Put it in a shared header and forget about it.
     inline constexpr std::size_t k_cache_line =
         std::hardware_destructive_interference_size;
 #else
-    inline constexpr std::size_t k_cache_line = 64;  // correct for every x86-64 / ARM64 shipping today
+    inline constexpr std::size_t k_cache_line = 64;  // 64 on x86-64 / most ARM64 (128 on Apple Silicon)
 #endif
 #endif
 ```
@@ -124,9 +124,11 @@ public:
     }
 
     // Approximate. Do not use for correctness.
+    // Load tail_ first so a concurrent pop cannot make t > h and underflow size_t.
     [[nodiscard]] std::size_t size_approx() const noexcept {
-        return head_.load(std::memory_order_acquire)
-             - tail_.load(std::memory_order_acquire);
+        const auto t = tail_.load(std::memory_order_acquire);
+        const auto h = head_.load(std::memory_order_acquire);
+        return h >= t ? (h - t) : 0;
     }
 
     [[nodiscard]] std::size_t capacity() const noexcept { return mask_; }  // usable slots
@@ -202,10 +204,12 @@ int main() {
 
 ### When NOT to Use
 
-- Multiple producers **or** multiple consumers -- two threads calling `try_push` simultaneously
-  race on `head_` with no mutual exclusion. Use a mutex-based MPMC queue or Vyukov's bounded MPMC.
-- Producers/consumers assigned dynamically at runtime -- "one thread" is a permanent identity,
-  not a turn-taking agreement.
+- Multiple concurrent producers **or** multiple concurrent consumers -- two threads calling
+  `try_push` simultaneously race on `head_` with no mutual exclusion. Use a mutex-based MPMC
+  queue or Vyukov's bounded MPMC.
+- Producers/consumers hopping across threads without synchronization -- "single producer/consumer"
+  requires either a dedicated thread or an explicit happens-before handoff (such as a mutex
+  serializing callers, as shown in Chapter 12).
 - Blocking push semantics needed -- SPSC is non-blocking by design. Add semaphores or switch to
   the bounded queue in Pattern 4.
 
@@ -264,9 +268,9 @@ public:
     // not fire-and-wait-inline.
     template <typename F, typename... Args>
     [[nodiscard]] auto submit(F&& f, Args&&... args)
-        -> std::future<std::invoke_result_t<F, Args...>>
+        -> std::future<std::invoke_result_t<std::decay_t<F>, std::decay_t<Args>...>>
     {
-        using R = std::invoke_result_t<F, Args...>;
+        using R = std::invoke_result_t<std::decay_t<F>, std::decay_t<Args>...>;
 
         // Bind args now (before the lock) so the lambda is self-contained.
         auto bound = [fn  = std::forward<F>(f),
@@ -304,9 +308,10 @@ private:
                 // (e.g. during constructor-throw unwind) rather than by the
                 // predicate becoming true. In that case, exit cleanly.
                 //
-                // DRAIN VARIANT: replace `stop_` with `stop_ && q_.empty()`
-                // to finish queued tasks before exiting. Documented policy:
-                // default = discard queued, complete in-flight only.
+                // DRAIN VARIANT: replace `if (stop_) return;` below with
+                // `if (stop_ && q_.empty()) return;` to finish queued tasks
+                // before exiting. Documented policy: default = discard queued,
+                // complete in-flight only.
                 if (!cv_.wait(lk, st, [&]{ return stop_ || !q_.empty(); }))
                     return;  // stop token fired before predicate satisfied
                 if (stop_) return;
@@ -333,7 +338,7 @@ private:
 ### Usage
 
 ```cpp
-ThreadPool pool(std::thread::hardware_concurrency());
+ThreadPool pool(std::max(1u, std::thread::hardware_concurrency()));
 
 std::vector<std::future<int>> futs;
 for (int i = 0; i < 64; ++i)
@@ -379,8 +384,9 @@ outer.get();  // hangs forever
 
 ### Properties
 
-- **FIFO dispatch.** Tasks execute in submission order. One mutex serialises all `submit()` calls;
-  this is correct and fast enough for task rates below ~1 M/s. Above that, replace with a
+- **FIFO dequeue.** Tasks are pulled from the queue in submission order (actual completion order
+  across multiple workers still depends on OS scheduling). One mutex serialises all `submit()`
+  calls; this is correct and fast enough for task rates below ~1 M/s. Above that, replace with a
   lock-free MPMC queue and a semaphore for sleeping workers.
 - **Exception propagation.** If a task throws, the exception is captured in the `packaged_task`
   and rethrown on `future.get()`. Workers do not crash.
@@ -398,7 +404,7 @@ outer.get();  // hangs forever
 Routing tables, config snapshots, ML weights: change rarely, read on every request -- readers must
 never block writers.
 
-> **Intuition pump (real-world):** The museum's display case. The curators rarely swap out the artifact — maybe once a day, maybe once a week (that's your `publish()`). Visitors file past it constantly, all day, dozens at a time (that's your `snapshot()` readers). No visitor blocks another visitor. No visitor asks the curator's permission to look. When the curator does swap the artifact — at 2am, with gloves, while you're asleep — every visitor who grabbed a reference to the old artifact before the swap continues looking at it unmolested. The old artifact's ref count keeps it alive until the last visitor walks away. The new artifact becomes visible to anyone who arrives after the swap. Zero reader contention. Zero blocking. The `shared_ptr` ref counts are the velvet rope: they keep both artifacts alive for exactly as long as someone is looking.
+> **Intuition pump (real-world):** The museum's display case. The curators rarely swap out the artifact — maybe once a day, maybe once a week (that's your `publish()`). Visitors file past it constantly, all day, dozens at a time (that's your `snapshot()` readers). No visitor blocks another visitor. No visitor asks the curator's permission to look. When the curator does swap the artifact — at 2am, with gloves, while you're asleep — every visitor who grabbed a reference to the old artifact before the swap continues looking at it unmolested. The old artifact's ref count keeps it alive until the last visitor walks away. The new artifact becomes visible to anyone who arrives after the swap. Zero application-level reader locks. The `shared_ptr` ref counts are the velvet rope: they keep both artifacts alive for exactly as long as someone is looking.
 
 **API:** `snapshot() -> shared_ptr<const T>` (acquire-load, lock-free*), `publish(shared_ptr<T>)` (release-store).
 
@@ -502,10 +508,13 @@ silently drop data or grow unbounded queues.
 #include <condition_variable>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <cstddef>
 
 template <typename T>
 class BoundedQueue {
+    static_assert(std::is_nothrow_move_constructible_v<T>,
+                  "T must be nothrow-movable so pop() cannot lose items or strand waiters");
 public:
     explicit BoundedQueue(std::size_t cap) : cap_(cap) {
         if (cap == 0) throw std::invalid_argument("BoundedQueue: cap must be > 0");
@@ -570,21 +579,14 @@ struct Raw       { int id; std::string data; };
 struct Processed { int id; std::size_t len; std::string result; };
 
 void run_pipeline(std::size_t n_workers = 4) {
+    if (n_workers == 0) n_workers = 1;
     BoundedQueue<Raw>       qa(256);   // producer  -> workers
     BoundedQueue<Processed> qb(128);   // workers   -> aggregator
-
-    // Exception safety: guarantee qa.close() fires on every exit path.
-    // If the producer jthread constructor throws (e.g. std::system_error from OS),
-    // workers blocked in qa.pop() would otherwise hang forever, and the closer
-    // jthread — which is already running at that point — would never join.
-    struct QaGuard {
-        BoundedQueue<Raw>& q;
-        ~QaGuard() { q.close(); }  // idempotent; safe if producer already closed it
-    } qa_guard{qa};
 
     // Declare jthreads in REVERSE shutdown order.
     // C++ destroys locals in reverse declaration order.
     // We want: producer destroyed first (gets stop, closes qa),
+    //   then qa_guard (closes qa if producer construction threw before closer joins workers),
     //   then closer (joins workers, closes qb),
     //   then workers (already joined by closer -- fast no-op),
     //   then aggregator (qb now closed, drains and exits).
@@ -596,29 +598,43 @@ void run_pipeline(std::size_t n_workers = 4) {
         std::cout << count << " items, " << bytes << " bytes\n";
     });
 
-    // Stage 2 — Transform workers
+    // Guard Stage 2 + closer creation: if any worker or closer jthread constructor
+    // throws std::system_error, close qa and qb so already-spawned threads and
+    // aggregator unblock and join cleanly during stack unwinding.
     std::vector<std::jthread> workers;
-    workers.reserve(n_workers);
-    for (std::size_t w = 0; w < n_workers; ++w) {
-        workers.emplace_back([&] {
-            while (auto r = qa.pop()) {
-                Processed p;
-                p.id     = r->id;
-                p.len    = r->data.size();
-                p.result = std::string(r->data.rbegin(), r->data.rend());
-                if (!qb.push(std::move(p))) break;  // qb closed early
-            }
+    std::jthread closer;
+    try {
+        workers.reserve(n_workers);
+        for (std::size_t w = 0; w < n_workers; ++w) {
+            workers.emplace_back([&] {
+                while (auto r = qa.pop()) {
+                    Processed p;
+                    p.id     = r->id;
+                    p.len    = r->data.size();
+                    p.result = std::string(r->data.rbegin(), r->data.rend());
+                    if (!qb.push(std::move(p))) break;  // qb closed early
+                }
+            });
+        }
+
+        // Closer: waits for all workers to drain qa, then closes qb.
+        closer = std::jthread([&] {
+            for (auto& t : workers) if (t.joinable()) t.join();
+            qb.close();  // signals aggregator: no more transformed items
         });
+    } catch (...) {
+        qa.close();
+        qb.close();
+        throw;
     }
 
-    // Closer: waits for all workers to drain qa, then closes qb.
-    // Declared after workers (so workers vector is valid when closer runs),
-    // destroyed before workers (so workers are joined before workers vector
-    // destructs -- the workers vector's jthread dtors become no-ops).
-    std::jthread closer([&] {
-        for (auto& t : workers) if (t.joinable()) t.join();
-        qb.close();  // signals aggregator: no more transformed items
-    });
+    // Exception safety: declared AFTER closer (so ~QaGuard runs BEFORE closer's
+    // destructor during stack unwinding!). If the producer jthread constructor
+    // throws below, ~QaGuard closes qa first so workers exit and closer can join.
+    struct QaGuard {
+        BoundedQueue<Raw>& q;
+        ~QaGuard() { q.close(); }  // idempotent; safe if producer already closed it
+    } qa_guard{qa};
 
     // Stage 1 — Producer (declared last = destroyed first)
     std::jthread producer([&](std::stop_token st) {
@@ -636,10 +652,10 @@ void run_pipeline(std::size_t n_workers = 4) {
 
     // Destruction order on scope exit (reverse of declaration):
     //   producer  → already joined above; dtor is a no-op
+    //   qa_guard  → qa.close() (idempotent; crucial if producer ctor threw!)
     //   closer    → joins workers (they exit when qa is closed+empty), closes qb
     //   workers   → already joined by closer; jthread dtors are no-ops
     //   aggregator→ qb.pop() returns nullopt; thread exits and joins
-    //   qa_guard  → qa.close() (idempotent; producer already closed it)
     //   qb, qa    → destroyed after all threads have exited
 }
 ```
@@ -658,15 +674,16 @@ void run_pipeline(std::size_t n_workers = 4) {
   struct above closes `qa` unconditionally on scope exit; `close()` is idempotent so the
   normal path (producer closing it) and the exception path both work correctly.
 - **Close source first, sink last.** Closing `qb` before workers finish draining `qa` causes
-  workers to block forever on `qb.push()`. They never exit. The closer never joins. Hang.
+  workers' `qb.push()` calls to return `false` immediately, silently dropping every remaining
+  in-flight item from `qa` on the floor.
 - **The closing chain: producer closes qa → workers drain qa and exit → closer joins workers
   and closes qb → aggregator drains qb and exits.** The declaration order enforces this.
 - **Queue depth = saturation signal.** `qa.size()` near capacity means workers are the bottleneck.
   `qb.size()` near capacity means the aggregator is the bottleneck. Emit both as metrics every
   second; alert on sustained near-capacity depth.
 - **Back-pressure propagates automatically.** A slow aggregator fills `qb`; workers block on
-  `qb.push()`; `qa` stays empty; the producer blocks on `qa.push()`. No explicit throttle logic
-  needed. This is why bounded beats unbounded.
+  `qb.push()`; `qa` fills up right behind them; the producer blocks on `qa.push()`. No explicit
+  throttle logic needed. This is why bounded beats unbounded.
 
 ### Queue-Depth Monitor
 
@@ -898,6 +915,7 @@ Many producers, many consumers, bounded memory, graceful shutdown; boring enough
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 #include <cstddef>
@@ -906,6 +924,8 @@ Many producers, many consumers, bounded memory, graceful shutdown; boring enough
 // close() means: no new pushes; consumers drain queued items; then pop() returns nullopt.
 template <typename T>
 class MpmcBoundedQueue {
+    static_assert(std::is_nothrow_move_constructible_v<T>,
+                  "T must be nothrow-movable so pop_locked() cannot lose items or skip notify");
 public:
     explicit MpmcBoundedQueue(std::size_t capacity)
         : ring_(capacity), capacity_(capacity)
@@ -1063,6 +1083,28 @@ public:
 
         Node(T v, std::shared_ptr<const Node> n)
             : value(std::move(v)), next(std::move(n)) {}
+
+        // Iterative destructor: the default shared_ptr chain is recursive — one stack frame per
+        // node. A history grown to ~50k–100k entries blows the default 1 MiB Windows stack on
+        // whichever poor thread drops the last reference (often a reader Snapshot, not the writer).
+        // Why not check use_count() == 1? Because [util.smartptr.shared.obs]/16 warns use_count()
+        // is a relaxed hint that does not synchronize with prior readers finishing traversal.
+        // Instead, when *this* node's refcount genuinely hits zero (with full acq_rel sync),
+        // we park 'next' in a thread-local drain queue so nested ~Node() calls flatten to O(1) stack.
+        ~Node() {
+            if (!next) return;
+            thread_local bool draining = false;
+            thread_local std::vector<std::shared_ptr<const Node>> garbage;
+            garbage.push_back(std::move(next));
+            if (draining) return;
+            draining = true;
+            while (!garbage.empty()) {
+                auto cur = std::move(garbage.back());
+                garbage.pop_back();
+                cur.reset();  // if last owner, ~Node() just pushes cur->next onto 'garbage'
+            }
+            draining = false;
+        }
     };
 
     using Snapshot = std::shared_ptr<const Node>;
@@ -1070,20 +1112,7 @@ public:
     ObservableHistory() = default;
     ObservableHistory(const ObservableHistory&)            = delete;
     ObservableHistory& operator=(const ObservableHistory&) = delete;
-
-    // Iterative destructor: the default shared_ptr chain is recursive — one stack frame per
-    // node. A history grown to ~50k–100k entries blows the default 1 MiB Windows stack on
-    // whichever thread drops the last reference (usually a reader, not the writer). Walk the
-    // chain on the heap instead.
-    ~ObservableHistory() {
-        auto p = head_.exchange(nullptr, std::memory_order_acquire);
-        while (p) {
-            // Move next out before p is released. Once p's refcount hits zero, Node::next
-            // is already empty so the default Node dtor does not recurse.
-            auto next = std::move(const_cast<std::shared_ptr<const Node>&>(p->next));
-            p = std::move(next);
-        }
-    }
+    ~ObservableHistory() = default;
 
     // WRITER THREAD ONLY. Multiple writers need a CAS loop or a mutex.
     void prepend(T value) {
@@ -1142,7 +1171,7 @@ void example() {
 - **Publication is acquire/release.** Writer constructs the whole immutable node, then release-stores `head_`; readers acquire-load and see a fully built list.
 - **Single writer is load-bearing.** Two writers using `store()` can lose one prepend. Use a CAS loop or a mutex if writers multiply like services after a reorg.
 - **Great for observable history.** Event logs, undo stacks, audit trails, append-only time-series breadcrumbs. Terrible for high-rate telemetry where ref counts become the tax collector.
-- **Long chains must destruct iteratively.** The default `shared_ptr` chain destructor recurses once per node — fifty thousand audit-log entries on the default 1 MiB Windows stack crashes whichever thread drops the last snapshot. The explicit `~ObservableHistory()` above walks the heap instead. Callers holding `Snapshot` handles to long-lived chains should `.reset()` them explicitly rather than leaving the work to a random destructor frame.
+- **Long chains must destruct iteratively.** The default `shared_ptr` chain destructor recurses once per node — fifty thousand audit-log entries on the default 1 MiB Windows stack crashes whichever thread drops the last snapshot. Worse, checking `use_count() == 1` to unlink live nodes violates `[util.smartptr.shared.obs]/16` (a relaxed `use_count()` read does not synchronize with a reader that just finished walking `next`). Parking `std::move(next)` in a thread-local drain vector inside `~Node()` guarantees we only touch `next` *after* the node's own reference count has hit zero with full `acq_rel` synchronization, flattening recursion to O(1) stack depth.
 
 ---
 
@@ -1180,7 +1209,7 @@ class ShardedCounterMap {
 
     struct alignas(k_cache_line) Shard {
         mutable std::mutex mu;
-        std::unordered_map<Key, Count> counts;
+        std::unordered_map<Key, Count, Hash> counts;
     };
 
 public:
@@ -1215,8 +1244,8 @@ public:
         s.counts.erase(key);
     }
 
-    [[nodiscard]] std::unordered_map<Key, Count> snapshot() const {
-        std::unordered_map<Key, Count> total;
+    [[nodiscard]] std::unordered_map<Key, Count, Hash> snapshot() const {
+        std::unordered_map<Key, Count, Hash> total;
         for (std::size_t i = 0; i < Shards; ++i) {
             const auto& s = shards_[i];
             std::unique_lock lk(s.mu);
@@ -1290,11 +1319,11 @@ template <typename T, typename F>
         using R = std::invoke_result_t<Fn, T>;
         return std::async(std::launch::async,
             [in = std::move(input), fn = Fn(std::forward<F>(f))]() mutable -> R {
-                T value = in.get();  // propagates exceptions from the previous stage
+                decltype(auto) value = in.get();  // propagates exceptions; preserves T& if reference future
                 if constexpr (std::is_void_v<R>) {
-                    std::invoke(std::move(fn), std::move(value));
+                    std::invoke(std::move(fn), std::forward<T>(value));
                 } else {
-                    return std::invoke(std::move(fn), std::move(value));
+                    return std::invoke(std::move(fn), std::forward<T>(value));
                 }
             });
     }
@@ -1324,7 +1353,7 @@ void example() {
 ```
 
 - **Exceptions propagate naturally.** If `fetch()` throws, `input.get()` rethrows inside the continuation; the returned future carries that exception onward like a tiny legal notice.
-- **The returned future's destructor blocks** ([futures.async]/5). Discarding an intermediate `then(...)` result at a semicolon does not run the chain in the background — it runs it synchronously on the discarding thread, serialising what you thought was parallel work. Either chain every result or `.get()` it. A truly fire-and-forget continuation requires `std::thread{...}.detach()` or a real executor.
+- **The returned future's destructor blocks** ([futures.async]/5). Discarding an intermediate `then(...)` result at a semicolon does not let your caller move on — `~future()` blocks the discarding thread until the async task finishes, serialising what you thought was parallel work. Either chain every result or `.get()` it. A truly fire-and-forget continuation requires `std::thread{...}.detach()` or a real executor.
 - **Each `then()` may spawn a thread.** `std::async(std::launch::async)` is deliberately blunt. Fine for low fan-out I/O chains; catastrophic for thousands of micro-stages.
 - **No cancellation, no scheduler, no affinity.** This is not P2300, not coroutines, not a production executor. It is a clean bridge before you commit to the real machinery.
 - **Real use:** serialising dependent async I/O steps -- fetch, parse, transform, store -- when blocking would be uglier and a coroutine migration is not on today's bingo card.

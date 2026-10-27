@@ -126,7 +126,7 @@ t1.join(); t2.join();
 
 ## 2.4 Argument Passing: Copy, Move, Ref
 
-Everything passed to `std::thread` is **decay-copied** into internal storage. The thread cannot hold dangling stack references by accident — unless you explicitly ask it to with `std::ref`.
+Everything passed to `std::thread` is **decay-copied** into internal storage. The thread cannot hold dangling stack references to by-value arguments by accident — unless you explicitly ask it to with `std::ref` (or pass a raw pointer / reference-capturing lambda).
 
 ```cpp
 #include <thread>
@@ -204,7 +204,7 @@ t.request_stop();   // signal from outside; stop_requested() becomes true
 // destructor: request_stop() (idempotent) then join()
 ```
 
-All `stop_token`, `stop_source`, and `stop_callback` member functions on the same stop state are thread-safe by spec ([stoptoken.intro]); no external mutex is required around `request_stop()` ↔ `stop_requested()`.
+Concurrent calls to `request_stop()`, `stop_requested()`, and `stop_possible()` on the same stop state are thread-safe by spec ([thread.stoptoken.intro]/5); no external mutex is required around `request_stop()` ↔ `stop_requested()`.
 
 ### Comparison table
 
@@ -467,7 +467,7 @@ void parallelForEach(It first, It last, F fn) {
     const std::size_t nt = std::max(1u, std::thread::hardware_concurrency());
     const std::size_t chunk = (n + nt - 1) / nt;
     ThreadGroup g(std::min(nt, n), [&](std::size_t idx) {
-        auto b = std::next(first, static_cast<std::ptrdiff_t>(idx * chunk));
+        auto b = std::next(first, static_cast<std::ptrdiff_t>(std::min(idx * chunk, n)));
         auto e = std::next(first, static_cast<std::ptrdiff_t>(std::min((idx+1)*chunk, n)));
         std::for_each(b, e, fn);
     });

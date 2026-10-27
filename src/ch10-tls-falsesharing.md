@@ -53,7 +53,7 @@ Two threads, two `tls_x`, zero fights. This is the entire value proposition.
 
 ### 10.3 What `thread_local` Is Not
 
-Not free. On Linux, dynamic TLS goes through `__tls_get_addr` — a function call. On Windows, DLL-resident `thread_local` uses `FlsGetValue`. Cache the pointer if you access it in a tight loop:
+Not free. On Linux, dynamic TLS goes through `__tls_get_addr` — a function call. On Windows, implicit TLS indexes through the TEB's `ThreadLocalStoragePointer` array (while dynamic TLS destructors and Fiber Local Storage go through `FlsGetValue` / CRT callbacks), and crossing DLL boundaries without `/GA` adds extra indirection. Cache the reference if you access it in a tight loop:
 
 ```cpp
 void hot_loop()
@@ -145,8 +145,8 @@ inline void on_request()
 }
 
 // On thread exit you must flush the remainder — see pitfalls.
-// A RAII guard or an atexit hook works. "I'll remember to do it manually"
-// is not a strategy.
+// A thread_local RAII guard works (atexit only runs at process exit, not thread exit).
+// "I'll remember to do it manually" is not a strategy.
 ```
 
 The hot path is a single non-atomic increment. The atomic runs ~0.1% as often.
@@ -209,18 +209,18 @@ thread_local LogBuffer tls_log;    // destructor touches g_logger — boom
 // FIXED option A: join all threads before main exits (simplest, always correct)
 //   int main() { pool.join_all(); /* now static destructors run safely */ }
 
-// FIXED option B: guard with a process-lifetime atomic flag
-inline std::atomic<bool> g_alive{true};
+// FIXED option B: co-own the logger via shared_ptr (a bare atomic<bool> g_alive flag
+// still has a TOCTOU race if main flips it and destroys g_logger mid-flush)
+inline std::shared_ptr<Logger> g_logger = std::make_shared<Logger>();
 struct SafeLogBuffer {
+    std::shared_ptr<Logger> logger = g_logger;  // keeps Logger alive until this TLS dies
     ~SafeLogBuffer() {
-        if (g_alive.load(std::memory_order_acquire))
-            g_logger.flush(data_);   // safe: logger still alive
-        // else: silently drop — beats crashing
+        if (logger) logger->flush(data_);       // safe even after main() has packed up and left
+        // else: silently drop — beats crashing in CRT teardown
     }
     // ... data_ ...
 };
 thread_local SafeLogBuffer tls_log;
-// In main, before returning: g_alive.store(false, std::memory_order_release);
 ```
 
 **DLL boundaries on Windows.** The old `__declspec(thread)` was genuinely fragile with `FreeLibrary` — TLS destructors were not called for threads that existed before the DLL loaded. Modern C++11 `thread_local` on MSVC uses CRT TLS callbacks that fire correctly on `DLL_THREAD_DETACH` and `DLL_PROCESS_DETACH`. The "do not use TLS in unloaded DLLs" rule is legacy advice for `__declspec(thread)`. For new code: `thread_local` in a DLL is fine **as long as the DLL outlives every thread that initialized its TLS variables**. Plugin-style DLLs that may be unloaded via `FreeLibrary` while other threads still hold live `thread_local` instances must join or stop those threads — and ensure all TLS destructors have run — before unloading. Just do not mix `__declspec(thread)` and `thread_local` on the same variable.
@@ -444,13 +444,14 @@ When two pieces of data are *always read together by the same thread*, force the
 #include <cstdint>
 #include <cstddef>
 
-// Key and value always fetched together on lookup. Pack them tight.
-struct CacheEntry {
+// Key and value always fetched together on lookup. Pack and align them so an entry
+// fits within — and never straddles — a 64-byte cache line.
+struct alignas(32) CacheEntry {
     uint64_t key;
     uint64_t value;
     uint32_t generation;
     uint32_t flags;
-    // 24 bytes total — well under kCacheShare (64).
+    // 24 bytes payload (32 bytes aligned) — two entries fit cleanly in one 64-byte line.
 };
 
 // The assert is the whole point: it fires if someone adds a fat field later.
@@ -508,6 +509,7 @@ assert(reinterpret_cast<uintptr_t>(slots.data()) % 64 == 0);  // passes on MSVC/
         static_cast<Padded*>(std::aligned_alloc(64, 64 * sizeof(Padded))));
 #endif
 assert(slots2 && reinterpret_cast<uintptr_t>(slots2.get()) % 64 == 0);
+for (size_t i = 0; i < 64; ++i) new (&slots2[i]) Padded{};  // start lifetimes in raw storage
 ```
 
 **Padding bytes without alignment — the struct is 64 bytes but starts at a 16-byte boundary.**

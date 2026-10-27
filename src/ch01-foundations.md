@@ -132,7 +132,7 @@ Round-trip cost per iteration: ~40–60 ns. Actual work per iteration: ~0.3 ns.
 
 The protocol is correct. It is protecting you from stale reads. The protection just costs ~200× the work it protects.
 
-> **Pitfall:** False sharing requires two *writers*. A single writer with many readers is fine — readers hold the line in S state, pay L3 latency once, and coast. Only concurrent writes create the ping-pong. Diagnose with `perf c2c`; look for high "HITM" counts (hits in modified state).
+> **Pitfall:** False sharing requires at least one *writer*. Many readers with no writers is fine — readers hold the line in S state, pay L3 latency once, and coast. Writes invalidate other cores' cached copies and create the ping-pong. Diagnose with `perf c2c`; look for high "HITM" counts (hits in modified state).
 
 ---
 
@@ -337,7 +337,7 @@ Synchronizes-with sources you will use constantly:
 |---|---|---|
 | `std::atomic` | `store(release)` | `load(acquire)` |
 | `std::mutex` | `unlock()` | `lock()` |
-| `std::promise` / `std::future` | `set_value()` | `get()` (successful return only[^fut]) |
+| `std::promise` / `std::future` | `set_value()` | `get()` / `wait()` (successful return only[^fut]) |
 | `std::latch` | `count_down()` | `wait()` |
 | Thread creation | (spawning thread) | (thread body entry) |
 | Thread join | (thread body exit) | `join()` return |
@@ -527,11 +527,11 @@ struct Config { int timeout; int retries; };
 void use_config(int, int) { /* ... */ }
 
 std::atomic<std::shared_ptr<Config>> g_config{
-    std::make_shared<Config>(5, 3)
+    std::make_shared<Config>(Config{5, 3})
 };
 
 void reload_config() {
-    auto fresh = std::make_shared<Config>(10, 5);
+    auto fresh = std::make_shared<Config>(Config{10, 5});
     // Release: all writes to *fresh happen-before any reader's acquire load.
     // Old Config is ref-counted: released when the last shared_ptr drops — no leak, no UAF.
     g_config.store(fresh, std::memory_order_release);

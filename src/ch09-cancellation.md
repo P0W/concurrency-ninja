@@ -7,9 +7,10 @@
 `TerminateThread` (Win32). `pthread_cancel` (POSIX). `TerminateThread` and *asynchronous*
 `pthread_cancel` stop a thread at an arbitrary instruction — mid-`malloc`, lock held, pointer
 half-swapped. POSIX's *default* deferred cancellation fires only at cancellation points, but
-it is still dangerous without explicit cleanup handlers, and C++ destructors do not run.
-The postmortem is always six words: *the heap lock was left held.* C++20's answer: **the
-thread stops itself.**
+in pure C POSIX it skips C++ destructors entirely, and on Linux (`glibc`/NPTL) it triggers
+`_Unwind_ForcedUnwind` — a foreign-exception stack unwind that silently `std::terminate()`s
+the moment it hits a `noexcept` boundary. The postmortem is always six words: *the heap lock
+was left held.* C++20's answer: **the thread stops itself.**
 
 ```cpp
 // The old way.  Filed under "never again."
@@ -28,7 +29,7 @@ std::jthread worker{[](std::stop_token st) {
 
 // From any thread, at any time — atomic, idempotent, thread-safe:
 worker.request_stop();
-// jthread destructor: request_stop() then join().  Never std::terminate().
+// jthread destructor: request_stop() then join().  Never std::terminate() for being unjoined.
 ```
 
 The code is the moral. The thread checks the flag. The thread decides when to stop.
@@ -74,8 +75,14 @@ void three_piece_demo() {
     std::mutex mu;
     std::condition_variable cv;  // plain cv: no stop_token magic hiding the callback
 
-    // RAII registration: fires when stop is requested; deregisters on destruction
-    std::stop_callback wake{tok, [&cv]{ cv.notify_all(); }};
+    // RAII registration: fires when stop is requested; deregisters on destruction.
+    // Lock mu inside the callback so notify_all() cannot fire between the predicate
+    // check and the wait (lost wakeup), and declare wake BEFORE lock so mu is not
+    // held when ~stop_callback() runs.
+    std::stop_callback wake{tok, [&mu, &cv]{
+        std::lock_guard lk{mu};
+        cv.notify_all();
+    }};
 
     std::unique_lock lock{mu};
     // wait_for returns true if stop fires (predicate became true), false on timeout
@@ -193,11 +200,16 @@ wire a `stop_callback` to nudge whatever you are blocked on.
 void interruptible_sleep(std::stop_token st, std::chrono::milliseconds dur) {
     std::mutex mu;
     std::condition_variable cv;
+
+    // Declare AFTER mu and cv (destructs before them) and BEFORE lock (so mu is
+    // already unlocked when ~stop_callback blocks on an in-flight callback).
+    // Acquiring mu inside the callback prevents a lost wakeup between predicate and wait.
+    std::stop_callback wake{st, [&mu, &cv]{
+        std::lock_guard lk{mu};
+        cv.notify_all();
+    }};
+
     std::unique_lock lock{mu};
-
-    // Declare AFTER mu and cv so it destructs BEFORE them (reverse order)
-    std::stop_callback wake{st, [&cv]{ cv.notify_all(); }};
-
     cv.wait_for(lock, dur, [&st]{ return st.stop_requested(); });
     // exits at dur OR when stop fires, whichever is first
 }
@@ -238,9 +250,12 @@ public:
 
 private:
     void run(std::stop_token st) {
-        // Local waker captures cv_ by reference. Safe: join() in ~jthread ensures
-        // this thread exits before any member (including cv_) is destroyed.
-        std::stop_callback waker{st, [this]{ cv_.notify_all(); }};
+        // Local waker captures mu_ and cv_. Safe: join() in ~jthread ensures
+        // this thread exits before any member (including mu_ and cv_) is destroyed.
+        std::stop_callback waker{st, [this]{
+            std::lock_guard lk{mu_};
+            cv_.notify_all();
+        }};
 
         while (!st.stop_requested()) {
             if (auto r = fetch(url_); !r.empty() && !st.stop_requested())
@@ -283,6 +298,7 @@ lifetime coordination is the caller's responsibility.
 #include <thread>
 #include <vector>
 #include <atomic>
+#include <chrono>
 #include <utility>
 
 class IndexingService {
@@ -336,6 +352,10 @@ Cancellation flows naturally: pass `stop_token` by value down the call stack.
 #include <string>
 #include <string_view>
 #include <functional>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 
 std::optional<std::string> db_query(std::string_view sql, std::stop_token st);
 std::optional<std::string> post_process(std::string_view raw, std::stop_token st);
@@ -528,8 +548,10 @@ while (true) {}  // now runs forever; your service never shuts down
 // FIX: catch specific exceptions. Re-check stop_requested() in catch blocks.
 ```
 
-- **`condition_variable` (not `_any`) + `stop_token` overload:** does not exist. Compile
-  error if you're lucky; mysterious non-wakeup if you're not. Use `_any`.
+- **`condition_variable` (not `_any`) + `stop_token`:** the `wait(lock, st, pred)` overload
+  does not exist on plain `condition_variable`. Compile error if you pass `st` directly;
+  mysterious non-wakeup if you just check `st.stop_requested()` in the predicate with nobody
+  ringing the doorbell. Use `_any`.
 - **`jthread` declared first in a class with a mutex:** thread starts before the mutex
   initializes. Data race. Declare `jthread` last. Always.
 - **Forgetting `request_stop()` on manually-managed workers:** they run forever.
@@ -543,7 +565,7 @@ while (true) {}  // now runs forever; your service never shuts down
 |---|---|---|
 | MSVC | 19.29 (VS 2019 16.9) | Full: `jthread`, `stop_token`, `cv_any` overloads |
 | GCC | 11 | Full |
-| Clang | 13 + libc++ 14 | `jthread` needs libc++ 14; with libstdc++ needs GCC 11 headers |
+| Clang | 14 (libstdc++) / 18–20 (libc++) | With `libstdc++` needs GCC 11+ headers; `libc++` added `jthread` in 18 (`-fexperimental-library`) and enabled it by default in 20 |
 
 ```cpp
 #if __cpp_lib_jthread >= 201911L
@@ -557,7 +579,7 @@ while (true) {}  // now runs forever; your service never shuts down
         std::unique_lock<std::mutex> lk{mu};
         cv.wait(lk, [&]{ return stop.load(); });
     }};
-    // shutdown: stop.store(true); cv.notify_all(); t.join();
+    // shutdown: { std::lock_guard<std::mutex> lk{mu}; stop.store(true); } cv.notify_all(); t.join();
 #endif
 ```
 
@@ -582,15 +604,15 @@ stop_callback<F>{token, callable}
 jthread
   ├── constructor: if callable takes (stop_token, ...) → token is auto-injected
   ├── request_stop(): forwards to internal stop_source
-  └── destructor: request_stop() → join()  (in that order, always, never terminate())
+  └── destructor: request_stop() → join()  (in that order, never terminate() for being unjoined)
 
 Blocking wait patterns (pick one):
-  condition_variable_any::wait[_for](lock, stop_token, pred)  ← idiomatic C++20
-  stop_callback{st, [&cv]{ cv.notify_all(); }}                ← general-purpose wakeup
+  condition_variable_any::wait[_for](lock, stop_token, pred)                    ← idiomatic C++20
+  stop_callback{st, [&]{ std::lock_guard g{mu}; cv.notify_all(); }}             ← lock mu so notify can't race wait
 
-Class member declaration order:
-  std::mutex, std::condition_variable[_any], ..., std::jthread  ← jthread LAST
-  captured locals, captured cv/mutex, ..., std::stop_callback   ← stop_callback LAST
+Class member & wait-scope declaration order:
+  std::mutex, std::condition_variable[_any], ..., std::jthread                  ← jthread LAST in class
+  mu & cv (outer) → stop_callback (locks mu) → unique_lock (inner wait scope)   ← unlock mu BEFORE ~stop_callback
 ```
 
 ---

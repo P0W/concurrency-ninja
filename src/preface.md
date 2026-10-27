@@ -38,7 +38,7 @@ Here's what the fix actually is:
 unsigned int g_processed = 0;
 void worker() { ++g_processed; }
 
-// After — correct, and the overhead is immeasurable on x86
+// After — correct; avoids full barriers, though LOCK XADD on a shared cache line still isn't free
 std::atomic<unsigned int> g_processed{0};
 void worker() { g_processed.fetch_add(1, std::memory_order_relaxed); }
 ```

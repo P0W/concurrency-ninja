@@ -116,10 +116,10 @@ is a branch on a guard variable already in L1 cache.
 The thread-safe-initialization guarantee is [stmt.dcl]/4, not [thread.once]. One edge-case
 difference: recursive re-entry into a magic static — calling `config()` from inside
 `load_from_disk()` — is undefined behavior per [stmt.dcl]/4. `call_once` handles the
-equivalent re-entry differently: the recursive call deadlocks (the flag is in "executing"
-state per [thread.once.callonce]/3), which is hostile but specified. For the common
-non-recursive case, they produce identical results; cite [stmt.dcl]/4 when you need the
-chapter and verse.
+equivalent re-entry no more charitably: a recursive call on the same flag waits on an active
+execution that can never return ([thread.once.callonce]/2; UB on POSIX `pthread_once`) — an
+instant self-deadlock, which is hostile, as nature intended. For the common non-recursive
+case, they produce identical results; cite [stmt.dcl]/4 when you need the chapter and verse.
 
 ### Solution 2 — std::call_once (per-instance lazy init)
 
@@ -209,7 +209,7 @@ Two independent initializations need two flags.
 ```
 callable completes normally  →  flag marked done; all blocked threads unblock
 callable throws              →  flag NOT marked done; next caller retries
-                                (The standard calls this "exceptional return" — [thread.once.callonce]/3.)
+                                (The standard calls this "exceptional execution" — [thread.once.callonce]/2; sync is /3.)
 ```
 
 ### Retryable Startup
@@ -334,9 +334,9 @@ class OnceRegistry {
     // map_mtx_ held only for this lookup — not during the expensive init.
     Entry* get_entry(const std::string& key) {
         std::lock_guard<std::mutex> lk(map_mtx_);
-        auto [it, inserted] = entries_.emplace(key, nullptr);
-        if (inserted) it->second = std::make_unique<Entry>();
-        return it->second.get();
+        auto& ptr = entries_[key];
+        if (!ptr) ptr = std::make_unique<Entry>();
+        return ptr.get();
     }
 
 public:

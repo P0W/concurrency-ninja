@@ -73,7 +73,7 @@ struct Server {
 };
 ```
 
-*See Ch. 3.*
+*See Ch. 2.*
 
 ---
 
@@ -193,7 +193,7 @@ void transfer(Account& a, Account& b, int n) {
 }
 ```
 
-*See Ch. 4.*
+*See Ch. 3.*
 
 ---
 
@@ -257,7 +257,7 @@ std::unique_lock lk(m_mutex);
 auto lk2 = std::move(lk);  // lk is now empty and unlocked; lk2 holds the mutex
 
 // broken — calling unlock() directly on a mutex this thread does not own is UB
-// (precondition violation per [N4861] §32.5.4.2.2/24; two threads can be in the critical
+// (precondition violation per [N4861] [thread.mutex.requirements.mutex]/22; two threads can be in the critical
 //  section simultaneously — the kind of bug that shows up only under load, at 3 a.m.)
 void release_for(std::mutex& m) { m.unlock(); }   // caller never held the lock
 
@@ -340,7 +340,7 @@ m_cv.wait(lk, [this] { return m_ready; });
 process(m_data);
 ```
 
-*See Ch. 5.*
+*See Ch. 4.*
 
 ---
 
@@ -358,7 +358,7 @@ m_cv.notify_one();    // waiter may already be past the check and heading to sle
 m_cv.notify_one();
 ```
 
-*See Ch. 5.*
+*See Ch. 4.*
 
 ---
 
@@ -433,9 +433,10 @@ data = 42; ready = true; // producer
 while (!ready) {} use(data); // consumer may see ready=true, data=0
 
 // fixed
+std::atomic<int>  data{0};
 std::atomic<bool> ready{false};
-data.store(42, relaxed); ready.store(true, release); ready.notify_all(); // producer
-ready.wait(false, acquire); use(data.load(relaxed)); // consumer
+data.store(42, std::memory_order_relaxed); ready.store(true, std::memory_order_release); ready.notify_all(); // producer
+ready.wait(false, std::memory_order_acquire); use(data.load(std::memory_order_relaxed)); // consumer
 ```
 
 ---
@@ -461,15 +462,15 @@ x86's TSO hides missing acquire/release pairs. ARM, POWER, and RISC-V do not. Co
 
 ```cpp
 // broken on ARM — relaxed store/load; no ordering; consumer may see flag before data
-data.store(42, relaxed); flag.store(true, relaxed);   // producer
-if (flag.load(relaxed)) use(data.load(relaxed));       // consumer: data may still be 0
+data.store(42, std::memory_order_relaxed); flag.store(true, std::memory_order_relaxed);   // producer
+if (flag.load(std::memory_order_relaxed)) use(data.load(std::memory_order_relaxed));       // consumer: data may still be 0
 
 // fixed — release/acquire pair establishes happens-before on all architectures
-data.store(42, relaxed); flag.store(true, release);    // producer
-if (flag.load(acquire)) use(data.load(relaxed));       // consumer: data is visible
+data.store(42, std::memory_order_relaxed); flag.store(true, std::memory_order_release);    // producer
+if (flag.load(std::memory_order_acquire)) use(data.load(std::memory_order_relaxed));       // consumer: data is visible
 ```
 
-*See Ch. 7.*
+*See Ch. 6.*
 
 ---
 
@@ -483,7 +484,7 @@ val.compare_exchange_strong(exp, des,
     std::memory_order_acq_rel,
     std::memory_order_release); // ← undefined behavior
 
-// fixed — failure order must be ≤ success order, and never release/acq_rel
+// fixed — failure order must never be release/acq_rel (C++17 P0418R2 dropped the older ≤ success rule)
 val.compare_exchange_strong(exp, des,
     std::memory_order_acq_rel,
     std::memory_order_acquire); // acquire on failure is correct
@@ -537,7 +538,8 @@ Large types use a hidden internal lock. Your "lock-free" structure is not.
 
 ```cpp
 // broken assumption — may use internal locks on platforms without 128-bit CAS
-std::atomic<std::pair<uint64_t, uint64_t>> state;
+struct BigState { uint64_t a, b; };
+std::atomic<BigState> state;
 
 // verify at compile time
 static_assert(std::atomic<uint64_t>::is_always_lock_free);
@@ -569,7 +571,7 @@ std::atomic<TaggedPtr> head;
 // based reclamation (RCU), or reference counting — before dereferencing any removed node.
 ```
 
-*See Ch. 10.*
+*See Ch. 1 and Ch. 6.*
 
 ---
 
@@ -643,7 +645,7 @@ struct alignas(std::hardware_destructive_interference_size) Padded {
 Padded a, b; // each on its own cache line
 ```
 
-*See Ch. 8.*
+*See Ch. 10.*
 
 ---
 
@@ -683,13 +685,13 @@ auto f = std::async(std::launch::async, task); // guaranteed separate thread
 
 ### Calling `get()` Twice on the Same `future`
 
-`get()` is destructive. The second call throws `std::future_error::no_state`. Store the result; call `get()` once.
+`get()` is destructive (`valid()` becomes `false`). Calling `get()` on an invalid future is undefined behavior (`[futures.unique.future]/3`), though standard libraries are encouraged to throw `std::future_error(std::future_errc::no_state)`. Store the result; call `get()` once.
 
 ```cpp
 // broken
 auto f = std::async(std::launch::async, compute);
 auto a = f.get(); // ok
-auto b = f.get(); // throws future_error::no_state
+auto b = f.get(); // UB (typically throws std::future_error(std::future_errc::no_state))
 
 // fixed — call get() once; use shared_future for multiple consumers
 auto sf = std::async(std::launch::async, compute).share();
@@ -700,7 +702,7 @@ auto a = sf.get(); auto b = sf.get(); // shared_future: repeated get() is fine
 
 ### `set_value` Twice on the Same `promise`
 
-A `promise` can be satisfied only once. A second `set_value` throws `future_error::promise_already_satisfied`. Ensure exactly one code path fulfills the promise.
+A `promise` can be satisfied only once. A second `set_value` throws `std::future_error(std::future_errc::promise_already_satisfied)`. Ensure exactly one code path fulfills the promise.
 
 ```cpp
 // broken — both success path and cleanup block call set_value
@@ -845,9 +847,8 @@ int lookup(int k) {
 // better — thread_local unordered_map is still per-thread but cheaper to construct
 int lookup(int k) {
     thread_local std::unordered_map<int, int> cache;
-    auto [it, inserted] = cache.emplace(k, 0);
-    if (inserted) it->second = compute(k);
-    return it->second;
+    if (auto it = cache.find(k); it != cache.end()) return it->second;
+    return cache.emplace(k, compute(k)).first->second;
 }
 ```
 
@@ -1010,8 +1011,8 @@ You do not own the scheduler. The lock holder can be preempted at any point. Eve
 
 ```cpp
 // smell — user-space spinlock
-while (flag.exchange(true, acquire)) {} // spinning; lock holder may be preempted right now
-flag.store(false, release);
+while (flag.exchange(true, std::memory_order_acquire)) {} // spinning; lock holder may be preempted right now
+flag.store(false, std::memory_order_release);
 
 // fix — std::mutex spins briefly then yields to the OS; use it
 std::lock_guard lk(m_mutex);
@@ -1032,7 +1033,7 @@ The optimizer widened your race window. `volatile` does not fix this. Neither do
 // fix: correct synchronization, not a build-type workaround
 ```
 
-*See Ch. 7.*
+*See Ch. 1.*
 
 ---
 
@@ -1049,7 +1050,7 @@ ready.store(true, std::memory_order_relaxed); // missing release; ARM sees stale
 ready.store(true, std::memory_order_release);
 ```
 
-*See Ch. 7.*
+*See Ch. 1 and Ch. 6.*
 
 ---
 

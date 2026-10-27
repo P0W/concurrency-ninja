@@ -216,9 +216,12 @@ The workhorse. Study it. You will write some variant of this everywhere.
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 
 template <typename T>
 class BoundedBlockingQueue {
+    static_assert(std::is_nothrow_move_constructible_v<T>,
+                  "T must be nothrow-movable so pop() cannot lose items or strand waiters");
 public:
     explicit BoundedBlockingQueue(std::size_t capacity) : capacity_(capacity) {
         if (capacity == 0) throw std::invalid_argument("capacity must be > 0");
@@ -345,6 +348,8 @@ private:
         }
     }
 
+    void do_work() { /* ... */ }
+
     std::chrono::milliseconds   interval_;
     std::mutex                  mtx_;
     std::condition_variable_any cv_;        // _any: required for stop_token overload
@@ -391,11 +396,11 @@ private:
 };
 
 // Usage
-CountdownLatch latch(4);
+CountdownLatch latch(subsystems.size());
 for (auto& s : subsystems) {
-    std::thread([&]{ s.init(); latch.count_down(); }).detach();
+    std::thread([&s, &latch]{ s.init(); latch.count_down(); }).detach();
 }
-latch.wait();   // blocks until all 4 subsystems finish init
+latch.wait();   // blocks until all subsystems finish init
 ```
 
 On C++20 you can replace the whole class with `std::latch latch(4);` — see Chapter 8.
@@ -457,7 +462,7 @@ void produce() {
     } catch (...) {
         std::lock_guard<std::mutex> lk(mtx_); failed_ = true;
     }
-    cv_.notify_one();   // always reached — no wait is orphaned
+    cv_.notify_one();   // always reached — no wait is orphaned (waiter checks result_ || failed_)
 }
 ```
 
@@ -469,8 +474,8 @@ void producer() { std::lock_guard<std::mutex> lk(mtx_b); ready = true; }
 void consumer() { std::unique_lock<std::mutex> lk(mtx_a);
                   cv.wait(lk, [&]{ return ready; }); }  // loops forever
 
-// fixed: same mutex, both sides
-void producer() { std::lock_guard<std::mutex> lk(mtx_a); ready = true; }
+// fixed: same mutex on both sides + notify the poor waiter
+void producer() { { std::lock_guard<std::mutex> lk(mtx_a); ready = true; } cv.notify_one(); }
 void consumer() { std::unique_lock<std::mutex> lk(mtx_a);
                   cv.wait(lk, [&]{ return ready; }); }
 ```

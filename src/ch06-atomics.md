@@ -106,7 +106,7 @@ bool lf = big.is_lock_free();              // ask at runtime
 ```
 
 On x86-64: integers up to 64-bit and pointers are lock-free. 128-bit may use `CMPXCHG16B`
-(hardware-dependent) or an internal lock. On ARM64: 128-bit uses `LDXP`/`STXP` on ARMv8.1+.
+(hardware-dependent) or an internal lock. On ARM64: 128-bit uses `LDXP`/`STXP` (or `CASP` on ARMv8.1+ LSE).
 For types you cannot verify: store a pointer, not the object.
 
 ---
@@ -117,13 +117,13 @@ For types you cannot verify: store a pointer, not the object.
 |---|---|---|---|
 | `relaxed` | Atomic op, no ordering constraint | No fence cost† | No fence cost† |
 | `consume` | Dependency-ordered load | *Standard temporarily discourages it; every compiler promotes to acquire. Skip.* | |
-| `acquire` | Load: nothing after reorders before this | Free (TSO) | `LDAR` |
+| `acquire` | Load: nothing after reorders before this | Free (TSO) | `LDAR` (or `LDAPR` on v8.3+) |
 | `release` | Store: nothing before reorders after this | Free (TSO) | `STLR` |
 | `acq_rel` | Both; for RMW ops | `LOCK` prefix (Expensive) | `LDAXR`/`STLXR` |
-| `seq_cst` | Total order across all seq_cst ops | `MFENCE` on store | `STLR` + `DMB ISH` |
+| `seq_cst` | Total order across all seq_cst ops | `MFENCE` / `LOCK XCHG` on store | `LDAR`/`STLR` (ARMv7: `DMB ISH`) |
 
 **Practical default:** use `seq_cst` until a profiler gives you a specific reason not to.
-On x86, `seq_cst` *loads* are free (plain `MOV`), but `seq_cst` *stores* require an `MFENCE` or `LOCK XCHG` to flush the store buffer — roughly 15–40 cycles versus ~1 cycle for a `release` store. On ARM it costs even more. Only downgrade with measurement and explicit reasoning.
+On x86, `seq_cst` *loads* are free (plain `MOV`), but `seq_cst` *stores* require an `MFENCE` or `LOCK XCHG` to flush the store buffer — roughly 15–40 cycles versus ~1 cycle for a `release` store. On ARM64, `STLR`/`LDAR` already enforce sequential consistency (preventing `STLR` → `LDAR` reordering), whereas ARMv7 requires full `DMB` barriers. Only downgrade with measurement and explicit reasoning.
 
 > †`relaxed` removes ordering constraints, but the atomic operation itself is not free. Relaxed loads and stores carry no fence overhead. Relaxed RMW operations (e.g. `fetch_add(relaxed)`) still require a locked instruction on x86 or an exclusive-access pair (LDXR/STXR) on ARM, plus cache-line ownership traffic. Distinguish "no ordering cost" from "no cost."
 
@@ -222,16 +222,18 @@ Failure order cannot be `release` or `acq_rel` — no store happens on failure.
 
 ```cpp
 #include <atomic>
+#include <limits>
 
 std::atomic<int> g_value{ 0 };
 
 void increment_if_positive()
 {
     int current = g_value.load(std::memory_order::acquire);
-    while (current > 0)
+    while (current > 0 && current < std::numeric_limits<int>::max())
     {
         // weak: spurious failure just means we retry, which we would anyway.
         // On failure, current is refreshed with the actual value automatically.
+        // (Guard < max(): unlike atomic::fetch_add, plain 'current + 1' is signed UB at INT_MAX.)
         if (g_value.compare_exchange_weak(current, current + 1,
                 std::memory_order::acq_rel,   // success: we stored
                 std::memory_order::acquire))  // failure: we only loaded
@@ -290,7 +292,7 @@ public:
     int64_t get() const { return m_max.load(std::memory_order::relaxed); }
 
 private:
-    std::atomic<int64_t> m_max{ 0 };
+    std::atomic<int64_t> m_max{ INT64_MIN };
 };
 ```
 
@@ -357,7 +359,7 @@ public:
     }
 
 private:
-    std::atomic_flag m_flag;  // default-initialized to clear since C++20; ATOMIC_FLAG_INIT deprecated
+    std::atomic_flag m_flag;  // default-initialized to clear since C++20; ATOMIC_FLAG_INIT is redundant noise
 };
 ```
 
@@ -367,7 +369,9 @@ calls `clear()` + `notify_one()`), then we retry. This replaces a hot RMW spin l
 an OS-level sleep, eliminating cache line thrash while the lock is held.
 
 **Do not use spinlocks in user-space unless you have measured, profiled, and accepted that
-a preempted lock holder will starve every spinning thread.** `std::mutex` sleeps. This does not.
+a preempted lock holder will starve every spinning thread.** A pure busy-wait spinlock never
+sleeps; even the `wait(true)`-assisted version above lacks `std::mutex`'s OS priority-inheritance
+and adaptive spinning when the lock holder gets preempted.
 
 ---
 
@@ -379,7 +383,7 @@ Wrap a non-atomic object as atomic for one critical window without permanently p
 #include <atomic>
 #include <thread>
 
-struct WorkItem { int priority; int result{ 0 }; bool done{ false }; };
+struct WorkItem { int priority; int result{ 0 }; alignas(std::atomic_ref<bool>::required_alignment) bool done{ false }; };
 
 void produce(WorkItem& item)
 {
@@ -435,11 +439,12 @@ This is the "atomic publish" pattern for read-heavy, write-rare shared state. Co
 are immutable once published; updates swap the pointer. Chapter 11 covers this as a
 full concurrent data structure pattern.
 
-**Caveat:** every shipping standard-library implementation today (MSVC STL, libstdc++, libc++)
-backs `atomic<shared_ptr<T>>` with an internal lock — typically a spinlock table keyed by
-address. `is_lock_free()` returns false everywhere. If lock-freedom is a requirement, use
-`atomic<T*>` plus a manual reclamation scheme (hazard pointers, RCU, epoch). See Arthur
-O'Dwyer's critique for why the standard's design forces this.
+**Caveat:** shipping standard-library implementations today (MSVC STL, libstdc++; libc++
+does not yet implement it) back `atomic<shared_ptr<T>>` with an internal lock — typically a
+lock bit in the control-block pointer or a spinlock table keyed by address. `is_lock_free()`
+returns false everywhere. If lock-freedom is a requirement, use `atomic<T*>` plus a manual
+reclamation scheme (hazard pointers, RCU, epoch). See Arthur O'Dwyer's critique for why the
+standard's design forces this.
 
 ---
 
@@ -611,10 +616,12 @@ force either `[A]` before `[C]` or vice versa — guaranteeing at least one of
 `r1` or `r2` sees 1. You cannot have both threads sneak in before the other's
 store in a single total order.
 
-But `relaxed` loads are **outside** that total order. On ARM (and in the C++ abstract
-machine), a `relaxed` load has no ordering relationship with anything — not even the
-`seq_cst` store that precedes it on the *same* thread. The CPU is free to reorder
-`[B]` before `[A]` and `[D]` before `[C]`, giving both threads a stale zero.
+But `relaxed` loads are **outside** that total order. While `relaxed` operations still obey
+single-thread program order (`sequenced-before`) and per-variable coherence, they do not
+participate in the cross-variable `seq_cst` total order — nor does a preceding `seq_cst` store
+act as a downward fence for a later `relaxed` load on a *different* variable. Both ARM and x86
+are completely free to let `[B]` execute before `[A]` becomes globally visible and `[D]` before
+`[C]`, giving both threads a stale zero.
 
 `seq_cst`'s total order applies only to operations that are themselves `seq_cst`.
 One `relaxed` op drops you out of that order for that specific access — and,
@@ -726,7 +733,7 @@ Before writing any atomic, answer these. All of them. In order.
    to `acq_rel`, then `acquire`/`release`, then `relaxed` — only when you can prove it is
    sufficient. Document the proof in a comment.
 
-5. **Does TSan agree?** `-fsanitize=thread` (Clang/GCC) or `/fsanitize=thread` (MSVC 2022).
+5. **Does TSan agree?** `-fsanitize=thread` (Clang/GCC on Linux/macOS; MSVC does not yet ship TSan).
    If TSan fires, you have a race. If TSan is silent, it is necessary but not sufficient —
    write tests that actually exercise the concurrent paths.
 

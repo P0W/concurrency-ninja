@@ -291,7 +291,7 @@ auto f = std::async(std::launch::async, heavy, data);
 
 | Policy | Behavior |
 |---|---|
-| `std::launch::async` | New thread or thread pool. Guaranteed async. |
+| `std::launch::async` | Runs asynchronously ("as if in a new thread of execution", [futures.async]/3 — though Windows' thread-pool implementation historically recycled pool threads and delayed `thread_local` destructors). |
 | `std::launch::deferred` | Runs on the first thread to call `get()` or `wait()`. No new thread. Timed waits return `deferred` without running. |
 | `async \| deferred` (default) | Implementation picks. You have no guarantees. |
 
@@ -330,8 +330,8 @@ std::string fetch_url(const std::string& url)
 std::vector<std::string> fetch_all(const std::vector<std::string>& urls,
                                    std::ptrdiff_t max_in_flight = 16)
 {
-    if (max_in_flight <= 0)
-        throw std::invalid_argument("max_in_flight must be > 0");  // semaphore ctor UB otherwise
+    if (max_in_flight <= 0 || max_in_flight > std::counting_semaphore<>::max())
+        throw std::invalid_argument("max_in_flight out of range");  // 0 deadlocks; <0 or >max() is UB
     std::counting_semaphore<> slots(max_in_flight);
     std::vector<std::future<std::string>> futures;
     futures.reserve(urls.size());
@@ -456,8 +456,9 @@ The `shared_ptr<packaged_task>` bridge makes a move-only callable live inside a 
 #include <condition_variable>
 #include <thread>
 #include <vector>
+#include <string>
 #include <type_traits>
-#include <utility>      // std::move, std::forward, std::invoke
+#include <utility>      // std::move, std::forward
 #include <stdexcept>
 
 class ThreadPool
@@ -465,6 +466,7 @@ class ThreadPool
 public:
     explicit ThreadPool(std::size_t n)
     {
+        if (n == 0) throw std::invalid_argument("ThreadPool: n must be > 0");
         // If workers_.emplace_back() throws (OS thread limit, bad_alloc, etc.),
         // any threads already running would be destroyed unjoinable → std::terminate.
         // Catch, signal them to stop, drain, then rethrow. Your OS will thank you.
@@ -584,7 +586,7 @@ Suboptimal only when task latencies are wildly unequal and you care about seeing
 |---|---|---|
 | Discard `async` future | Dtor blocks; sequential perf (**async-launched only**) | Store the future |
 | No launch policy | async: dtor blocks; deferred: task silently dropped | Always `std::launch::async` |
-| `get()` twice | `future_error(no_state)` | One `get()`; `shared_future` for multi-read |
+| `get()` twice | UB (`future_error(no_state)` in practice) | One `get()`; `shared_future` for multi-read |
 | `set_value()` twice | `future_error(promise_already_satisfied)` | Write-once; audit all code paths |
 | Destroy promise without setting | waiters unblock; `get()` throws `future_error(broken_promise)` | `set_*` on every path, including catch |
 | `future<T&>` with dead referent | Dangling ref on `get()` | Use `future<T>` by value |
@@ -601,7 +603,7 @@ auto f = std::async(std::launch::async, work);  // OK — keep the future
 // --- get() twice ---
 auto f = std::async(std::launch::async, []{ return 1; });
 f.get();    // fine
-f.get();    // throws future_error(no_state)
+f.get();    // UB per [futures.unique.future]/15 (standard libraries commonly throw future_error(no_state))
 // Fix: f.share() → shared_future → call get() as many times as needed
 
 // --- set_value() twice ---
@@ -632,6 +634,7 @@ The entire ecosystem is one shared-state box with four different handles:
 std::async          — you just want it to run somewhere
 std::packaged_task  — you pick the executor
 std::promise        — you wire everything manually
+std::future / shared_future — you read the result (once / many times)
 ```
 
 Rules:

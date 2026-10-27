@@ -81,7 +81,7 @@ That's the thesis of this chapter. Everything else is just API surface.
 |---|---|---|
 | `count_down(n=1)` | No | Subtract n from counter; unblocks waiters if counter reaches 0 |
 | `wait()` | Yes | Block until counter == 0 |
-| `try_wait()` | No | Return true if counter already == 0; poll, not wait. May return false spuriously ([thread.latch]/8). |
+| `try_wait()` | No | Return true if counter already == 0; poll, not wait. May return false spuriously ([thread.latch.class]/12). |
 | `arrive_and_wait(n=1)` | Yes | `count_down(n)` + `wait()` in one call |
 
 Three rules burned into your brain:
@@ -223,8 +223,17 @@ void simulate(Grid& g, int frames, int nthreads) {
 
     std::vector<std::jthread> threads;
     threads.reserve(N);
-    for (int i = 0; i < nthreads; ++i)
-        threads.emplace_back(worker, static_cast<std::size_t>(i));
+    int spawned = 0;
+    try {
+        for (; spawned < nthreads; ++spawned)
+            threads.emplace_back(worker, static_cast<std::size_t>(spawned));
+    } catch (...) {
+        // If thread creation throws halfway through, drop the unspawned participants from
+        // the barrier so already-running workers don't wait forever during stack unwinding.
+        for (int j = spawned; j < nthreads; ++j)
+            sync.arrive_and_drop();
+        throw;
+    }
     // jthread joins on destruction
 }
 ```
@@ -240,9 +249,9 @@ The barrier auto-resets. There is no generation counter. The completion function
 | Method | Blocking? | What it does |
 |---|---|---|
 | `acquire()` | Yes | Block until count > 0, then decrement |
-| `try_acquire()` | No | Decrement if count > 0; else return false. May return false spuriously ([thread.sema.cnt]/10). |
-| `try_acquire_for(dur)` | Bounded | Decrement if count > 0 within timeout; **check the bool**. May return false spuriously. |
-| `try_acquire_until(tp)` | Bounded | Same, deadline-based. May return false spuriously. |
+| `try_acquire()` | No | Decrement if count > 0; else return false. May return false spuriously ([thread.sema.cnt]/13). |
+| `try_acquire_for(dur)` | Bounded | Decrement if count > 0 within timeout (`false` on timeout); **check the bool**. |
+| `try_acquire_until(tp)` | Bounded | Same, deadline-based (`false` on timeout). |
 | `release(n=1)` | No | Add n to count; wake up to n waiters |
 
 **No ownership.** Any thread can call `release()` — including one that never called `acquire()`. This is intentional for signaling and throttling. It is catastrophic if you treat it like a mutex. The distinction: mutex = ownership, semaphore = counting.
@@ -252,7 +261,7 @@ The barrier auto-resets. There is no generation counter. The completion function
 ```cpp
 // LeastMaxValue is a compile-time hint, not a runtime cap.
 // Use a value >= your actual maximum. When in doubt:
-std::counting_semaphore<> sem(16);          // LeastMaxValue = PTRDIFF_MAX, runtime count = 16
+std::counting_semaphore<> sem(16);          // default LeastMaxValue is impl-defined (>= PTRDIFF_MAX in practice), runtime count = 16
 std::counting_semaphore<16> sem_16(16);     // implementation may use smaller storage; max() is still only >= 16
 
 // try_acquire_for: CHECK THE RETURN VALUE or suffer silently
@@ -269,6 +278,7 @@ if (!sem.try_acquire_for(std::chrono::seconds(1))) {
 Cap async concurrency at 16: acquire before launch, RAII-release in the task. Classic for connection pools, rate-limited HTTP, DB query queues.
 
 ```cpp
+#include <atomic>
 #include <semaphore>
 #include <thread>
 #include <vector>
@@ -292,15 +302,8 @@ public:
 
         m_sem.acquire();  // blocks if MaxConcurrent tasks are already live
 
-        // Re-check after unblocking: drain() may have completed while we were parked.
-        // Return the permit before throwing so the pool doesn't permanently lose a slot.
-        if (m_closing.load(std::memory_order_acquire)) {
-            m_sem.release();
-            throw std::logic_error("ThrottledExecutor: submit() raced with drain()");
-        }
-
-        // RAII permit guard: if emplace_back throws (e.g. OOM), the permit is returned.
-        // disarm() after a successful emplace_back transfers ownership to the task's Guard.
+        // RAII permit guard: if we throw below or emplace_back throws (e.g. OOM),
+        // the permit is returned. disarm() after emplace_back transfers ownership.
         struct PermitGuard {
             std::counting_semaphore<MaxConcurrent>& s;
             bool owns{true};
@@ -309,12 +312,16 @@ public:
         } permit{m_sem};
 
         std::lock_guard lk(m_mtx);
+        // Re-check under m_mtx after unblocking: drain() may have started while we were parked.
+        if (m_closing.load(std::memory_order_relaxed))
+            throw std::logic_error("ThrottledExecutor: submit() raced with drain()");
+
         m_threads.emplace_back([this, task = std::forward<Fn>(fn)]() mutable {
             struct Guard {
                 std::counting_semaphore<MaxConcurrent>& s;
                 ~Guard() { s.release(); }   // fires on return AND on exception
             } g{m_sem};
-            task();
+            try { task(); } catch (...) {}  // prevent unhandled task exception from std::terminate-ing jthread
         });
         permit.disarm();  // emplace_back succeeded; task's Guard now owns the permit
     }
@@ -324,9 +331,12 @@ public:
     // m_closing enforces this: any submit() racing with drain() throws rather than
     // silently creating a lifetime hazard.
     void drain() {
-        m_closing.store(true, std::memory_order_release);
         std::vector<std::jthread> done;
-        { std::lock_guard lk(m_mtx); done = std::move(m_threads); }
+        {
+            std::lock_guard lk(m_mtx);
+            m_closing.store(true, std::memory_order_release);
+            done = std::move(m_threads);
+        }
         // jthread destructors join here — all tasks complete before drain() returns.
         // m_sem is never accessed by a task after its jthread has been joined.
     }
@@ -351,7 +361,7 @@ void process_all(std::vector<WorkItem> const& items) {
 
 The `Guard` RAII wrapper is not optional. If `task()` throws and you skip `release()`, that permit is gone forever. Your application silently throttles toward zero concurrency. You will not notice until load testing.
 
-> **Note:** `m_threads` grows by one `jthread` per `submit()` call and is only reaped in `drain()`. For long-running pools with millions of submissions, this accumulates completed (but not yet destroyed) `jthread` handles. `jthread`s that have run to completion are cheap — each is just a handle waiting to be joined — but if unbounded growth is a concern, prefer a fixed-size thread pool over this fan-out helper. This design is intentional for bounded-lifetime use cases (submit a batch, drain, done); it is not a long-running worker pool.
+> **Note:** `m_threads` grows by one `jthread` per `submit()` call and is only reaped in `drain()`. While the semaphore caps *active* concurrency at `MaxInFlight`, completed-but-unjoined `jthread`s in `m_threads` still retain OS thread handles (and potentially kernel/stack resources) until `drain()` joins them. For large or unbounded batches, prefer a fixed-size worker pool over this fan-out helper. This design is intentional for bounded-lifetime batches (submit a handful of tasks, drain, done); it is not a long-running worker pool.
 
 The previous edition of this snippet used `detach()` and a semaphore-acquire-loop drain. Reviewers correctly flagged the lifetime race: `drain()` could complete and destroy `m_sem` while a detached thread was still executing inside `s.release()` — deep inside futex wake logic. Tracking `jthread`s and joining them in `drain()` closes that window. Two additional hazards close the remaining race: the post-`acquire()` re-check catches a `drain()` that completed while `submit()` was parked, and the `PermitGuard` returns the slot if `emplace_back` throws so the pool never silently loses capacity. The semaphore does the backpressure; the join does the lifetime guarantee; both checks do the correctness guarantee. All are required.
 
@@ -381,26 +391,25 @@ public:
     // Guards release() with an atomic pending flag: only one kick outstanding at
     // a time. If a kick is already queued and not yet consumed, this is a no-op.
     void kick() {
-        bool expected = false;
-        if (m_pending.compare_exchange_strong(expected, true,
-                                              std::memory_order_acq_rel,
-                                              std::memory_order_relaxed))
+        if (!m_pending.exchange(true, std::memory_order_seq_cst))
             m_kick.release();
     }
 
-    // Idempotent: m_stop.exchange returns true if already shut down; only the
-    // first caller releases the semaphore. Safe to call from destructor too.
+    // Coalesces with kick() through the same m_pending gate so kick() followed by
+    // shutdown() before the worker wakes never calls release() twice on a
+    // binary_semaphore (which would exceed max() == 1 and invoke UB).
     void shutdown() {
-        if (!m_stop.exchange(true, std::memory_order_acq_rel))
-            m_kick.release();   // only the first shutdown signals
+        m_stop.store(true, std::memory_order_seq_cst);
+        if (!m_pending.exchange(true, std::memory_order_seq_cst))
+            m_kick.release();
     }
 
 private:
     void run() {
         while (true) {
             m_kick.acquire();                                   // sleeps until kicked
-            m_pending.store(false, std::memory_order_release);  // slot free for next kick
-            if (m_stop.load(std::memory_order_acquire)) break;
+            m_pending.store(false, std::memory_order_seq_cst);  // slot free for next signal
+            if (m_stop.load(std::memory_order_seq_cst)) break;
             do_work();
         }
     }
@@ -414,17 +423,17 @@ private:
 };
 ```
 
-Two cautions embedded in the design above. First: `shutdown()` is made idempotent via
-`m_stop.exchange` — only the first caller releases the semaphore. Without this, a user
-calling `shutdown()` explicitly followed by the destructor calling it again would issue two
-`release()` calls on a `binary_semaphore` whose count is already at 1, which is UB on all
-conforming implementations (both libstdc++ and libc++ ship `max() == 1` for
-`counting_semaphore<1>`). Second: `kick()` is guarded by `m_pending` — only one outstanding
-signal at a time. Back-to-back `kick()` calls before the worker wakes up coalesce to a
-single release, preventing a double-release UB. The worker clears `m_pending` after
-`acquire()` but before processing, making the slot available for the next kick. For work
-queues where each kick represents a distinct countable item, use `counting_semaphore<N>`
-with N sized to absorb the maximum outstanding burst.
+Two cautions embedded in the design above. First: both `kick()` and `shutdown()` gate
+`m_kick.release()` through the same `m_pending` flag (`m_stop` is set before testing
+`m_pending`). Without sharing that gate, a `kick()` followed by `shutdown()` before the
+worker wakes would issue two `release()` calls on a `binary_semaphore` whose count is
+already at 1, which is UB whenever `max() == 1` ([thread.sema.cnt]/8 guarantees `max() >= 1`,
+and libstdc++, libc++, and MSVC STL all set `max() == 1` for `counting_semaphore<1>`). Second: the worker
+clears `m_pending` (with `seq_cst`) immediately after `acquire()` and *before* checking
+`m_stop` or running `do_work()`, so any `kick()` or `shutdown()` that arrives afterward
+either observes `m_stop` already or posts a fresh permit. For work queues where each kick
+represents a distinct countable item, use `counting_semaphore<N>` with N sized to absorb
+the maximum outstanding burst.
 
 ---
 

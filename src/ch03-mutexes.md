@@ -524,7 +524,9 @@ void flush(const std::string& path)
         to_flush = std::move(m_records);   // O(1) move
     }                                       // lock released here
 
-    // I/O happens with no mutex held. Other threads write records freely.
+    // I/O happens with no m_records_mutex held. Producers write records freely.
+    // (If multiple threads call flush() concurrently, serialize the file write below
+    // with a separate m_flush_mutex so batches don't interleave on disk.)
     std::ofstream f(path, std::ios::app);
     for (const auto& r : to_flush)
         f << r << '\n';
@@ -585,10 +587,9 @@ Don't use `try_lock` as a routine performance trick. `if (!m.try_lock()) { skip(
 // Lock N mutexes from a dynamic collection, deadlock-free.
 // Strategy: every call site on every thread sorts by the same key (pointer address).
 // Global consistent order → no ABBA, no matter how many threads or how many nodes.
-//
-// RAII gap: callers own the unlock. If the locked state must escape this call site,
-// return std::vector<std::unique_lock<std::mutex>> with std::adopt_lock instead.
-void lock_all(std::vector<std::mutex*> mutexes)
+// Returns RAII guards for the deduplicated set so unlock happens automatically.
+[[nodiscard]] std::vector<std::unique_lock<std::mutex>>
+lock_all(std::vector<std::mutex*> mutexes)
 {
     // 1. Consistent global acquisition order — std::less<std::mutex*> gives a
     //    portable strict total order over pointers to unrelated objects.
@@ -599,17 +600,12 @@ void lock_all(std::vector<std::mutex*> mutexes)
     // 2. Remove duplicates — locking the same non-recursive mutex twice is UB.
     mutexes.erase(std::unique(mutexes.begin(), mutexes.end()), mutexes.end());
 
-    // 3. Sequential acquisition. Unwind cleanly if any lock() throws std::system_error.
-    std::size_t locked = 0;
-    try
-    {
-        for (auto* m : mutexes) { m->lock(); ++locked; }
-    }
-    catch (...)
-    {
-        for (std::size_t i = locked; i-- > 0;) mutexes[i]->unlock();
-        throw;
-    }
+    // 3. Sequential acquisition. If any lock() throws std::system_error,
+    //    already-constructed unique_locks in `locks` unwind in reverse order.
+    std::vector<std::unique_lock<std::mutex>> locks;
+    locks.reserve(mutexes.size());
+    for (auto* m : mutexes) locks.emplace_back(*m);
+    return locks;
 }
 ```
 
