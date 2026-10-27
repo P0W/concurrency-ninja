@@ -35,3 +35,248 @@ table {
   overflow-x: auto;
   max-width: 100%;
 }
+
+/* ------------------------------------------------------------------------
+ * Professional Technical Book Print Stylesheet (@media print)
+ * Produces an O'Reilly / No Starch Press style layout from print.html:
+ * - Forces clean black-on-white book typography even if Navy theme is active
+ * - Uses full printable width (.content main max-width: 100%)
+ * - 9.5pt body text, 7.8pt monospace code (fits ~105 chars/line without wrap)
+ * - Compact heading, blockquote, and table spacing
+ * ------------------------------------------------------------------------ */
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm 14mm 16mm 14mm;
+  }
+
+  :root,
+  html,
+  body,
+  .light,
+  .rust,
+  .coal,
+  .navy,
+  .ayu {
+    --bg: #ffffff !important;
+    --fg: #111827 !important;
+    --quote-bg: #f8fafc !important;
+    --quote-border: #334155 !important;
+    --table-border-color: #cbd5e1 !important;
+    --table-header-bg: #f1f5f9 !important;
+    --table-alternate-bg: #f8fafc !important;
+    --links: #0f172a !important;
+    --inline-code-color: #1e293b !important;
+    color-scheme: light !important;
+    background: #ffffff !important;
+    color: #111827 !important;
+  }
+
+  body {
+    font-family: Georgia, "Charter", "Cambria", "Times New Roman", serif !important;
+    font-size: 9.5pt !important;
+    line-height: 1.44 !important;
+    color: #111827 !important;
+    background: #ffffff !important;
+  }
+
+  .page,
+  .page-wrapper,
+  #page-wrapper,
+  .content,
+  #content,
+  .content main {
+    max-width: 100% !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+  }
+
+  /* Clean, proportional book headings */
+  h1, h2, h3, h4, h5, h6 {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+    color: #0f172a !important;
+    page-break-after: avoid !important;
+    break-after: avoid-page !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    line-height: 1.25 !important;
+  }
+
+  h1 {
+    font-size: 16pt !important;
+    font-weight: 700 !important;
+    margin-top: 0.2em !important;
+    margin-bottom: 0.5em !important;
+    padding-bottom: 4pt !important;
+    border-bottom: 1.2pt solid #0f172a !important;
+  }
+
+  h2 {
+    font-size: 12.2pt !important;
+    font-weight: 700 !important;
+    margin-top: 1.15em !important;
+    margin-bottom: 0.35em !important;
+    padding-bottom: 2pt !important;
+    border-bottom: 0.5pt solid #cbd5e1 !important;
+  }
+
+  h3 {
+    font-size: 10.4pt !important;
+    font-weight: 600 !important;
+    margin-top: 0.9em !important;
+    margin-bottom: 0.25em !important;
+  }
+
+  h4, h5, h6 {
+    font-size: 9.5pt !important;
+    font-weight: 600 !important;
+    margin-top: 0.7em !important;
+    margin-bottom: 0.2em !important;
+  }
+
+  p, ul, ol {
+    margin-top: 0.35em !important;
+    margin-bottom: 0.45em !important;
+    line-height: 1.44 !important;
+    orphans: 3;
+    widows: 3;
+  }
+
+  li {
+    margin-bottom: 0.18em !important;
+  }
+
+  /* Hide decorative horizontal rules and UI buttons in print */
+  hr {
+    display: none !important;
+  }
+
+  pre > .buttons,
+  .fa,
+  a.header::before {
+    display: none !important;
+  }
+
+  /* Compact, razor-sharp code blocks (7.8pt fits ~105 chars per A4 line) */
+  pre {
+    background: #f8fafc !important;
+    border: 0.5pt solid #cbd5e1 !important;
+    border-radius: 3pt !important;
+    padding: 5pt 7pt !important;
+    margin: 5pt 0 !important;
+    overflow-x: hidden !important;
+    /* Allow multi-screen code listings to flow across pages instead of leaving half-page gaps */
+    page-break-inside: auto !important;
+    break-inside: auto !important;
+  }
+
+  pre code,
+  pre.hljs {
+    font-family: "Cascadia Mono", "Consolas", "JetBrains Mono", "SFMono-Regular", "Menlo", monospace !important;
+    font-size: 7.8pt !important;
+    line-height: 1.32 !important;
+    background: transparent !important;
+    color: #0f172a !important;
+    padding: 0 !important;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+  }
+
+  /* Inline code */
+  :not(pre) > code {
+    font-family: "Cascadia Mono", "Consolas", monospace !important;
+    font-size: 8.4pt !important;
+    background: #f1f5f9 !important;
+    color: #0f172a !important;
+    padding: 0.5pt 3pt !important;
+    border: 0.4pt solid #e2e8f0 !important;
+    border-radius: 2pt !important;
+  }
+
+  /* High-contrast print syntax highlighting (overrides dark-theme hljs colors) */
+  .hljs-comment,
+  .hljs-quote {
+    color: #475569 !important;
+    font-style: italic !important;
+  }
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-built_in,
+  .hljs-type {
+    color: #1e3a8a !important;
+    font-weight: 600 !important;
+  }
+  .hljs-string,
+  .hljs-Title,
+  .hljs-section,
+  .hljs-attribute,
+  .hljs-literal,
+  .hljs-template-tag,
+  .hljs-template-variable,
+  .hljs-addition {
+    color: #065f46 !important;
+  }
+  .hljs-number,
+  .hljs-symbol,
+  .hljs-bullet,
+  .hljs-meta {
+    color: #7c2d12 !important;
+  }
+  .hljs-title,
+  .hljs-function {
+    color: #0f172a !important;
+    font-weight: 600 !important;
+  }
+
+  /* Intuition pump callout boxes */
+  blockquote {
+    background: #f8fafc !important;
+    color: #1e293b !important;
+    border-top: none !important;
+    border-bottom: none !important;
+    border-right: none !important;
+    border-left: 2.5pt solid #334155 !important;
+    margin: 6pt 0 !important;
+    padding: 4pt 9pt !important;
+    font-size: 9pt !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* Proper full-width book tables */
+  table {
+    display: table !important;
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+    font-size: 8.2pt !important;
+    line-height: 1.3 !important;
+    margin: 6pt 0 !important;
+    page-break-inside: auto !important;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  table thead {
+    background: #e2e8f0 !important;
+  }
+
+  table th,
+  table td {
+    padding: 3.5pt 6pt !important;
+    border: 0.5pt solid #cbd5e1 !important;
+    text-align: left !important;
+    color: #0f172a !important;
+  }
+
+  /* Image sizing (e.g. cover image on README) */
+  img {
+    max-height: 110mm !important;
+    width: auto !important;
+  }
+}
